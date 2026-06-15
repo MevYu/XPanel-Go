@@ -4,3 +4,7 @@
 data/
 *.test
 *.out
+
+# 含 JWT 密钥等敏感信息,首启自动生成,不入库
+config.json
+config.local.*
