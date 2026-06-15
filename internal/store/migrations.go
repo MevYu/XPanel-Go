@@ -24,4 +24,8 @@ var migrations = []string{
 		detail    TEXT,
 		source_ip TEXT
 	)`,
+	`CREATE TABLE IF NOT EXISTS module_state (
+		id      TEXT PRIMARY KEY,
+		enabled INTEGER NOT NULL DEFAULT 0
+	)`,
 }
