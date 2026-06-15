@@ -64,6 +64,7 @@ func (a *authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	// 忽略错误:logout 幂等,且不泄露 token 是否存在。
 	_ = a.svc.Logout(req.Refresh)
 	w.WriteHeader(http.StatusNoContent)
 }

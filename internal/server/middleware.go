@@ -23,9 +23,10 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 // RateLimiter:每 IP 一个令牌桶,容量 burst,每秒回补 1 个令牌。
 type RateLimiter struct {
-	burst   float64
-	mu      sync.Mutex
-	buckets map[string]*bucket
+	burst     float64
+	mu        sync.Mutex
+	buckets   map[string]*bucket
+	lastSweep time.Time
 }
 
 type bucket struct {
@@ -41,6 +42,21 @@ func (rl *RateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := time.Now()
+
+	// 空闲淘汰阈值:桶回补到满需 burst 秒,陈旧条目与全新桶等价,可安全删除。
+	ttl := time.Duration(rl.burst) * time.Second
+	if ttl < time.Minute {
+		ttl = time.Minute
+	}
+	if now.Sub(rl.lastSweep) >= ttl {
+		for k, v := range rl.buckets {
+			if now.Sub(v.last) >= ttl {
+				delete(rl.buckets, k)
+			}
+		}
+		rl.lastSweep = now
+	}
+
 	b := rl.buckets[ip]
 	if b == nil {
 		rl.buckets[ip] = &bucket{tokens: rl.burst - 1, last: now}

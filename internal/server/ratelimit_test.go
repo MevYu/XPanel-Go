@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestRateLimitBlocksBurst(t *testing.T) {
@@ -24,5 +25,17 @@ func TestRateLimitBlocksBurst(t *testing.T) {
 	}
 	if call() != http.StatusTooManyRequests {
 		t.Error("3rd request should be rate-limited")
+	}
+}
+
+func TestRateLimiterEvictsStaleBuckets(t *testing.T) {
+	rl := NewRateLimiter(2)
+	rl.buckets["1.1.1.1"] = &bucket{tokens: rl.burst, last: time.Now().Add(-time.Hour)}
+	rl.lastSweep = time.Now().Add(-time.Hour)
+
+	rl.allow("2.2.2.2")
+
+	if _, ok := rl.buckets["1.1.1.1"]; ok {
+		t.Error("stale bucket should be evicted")
 	}
 }
