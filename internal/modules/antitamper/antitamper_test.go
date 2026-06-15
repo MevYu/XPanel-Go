@@ -155,7 +155,7 @@ func TestEndToEndTamperDetection(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "shell.php"), "evil")
 
 	// one scan pass (deterministic, no goroutine timing)
-	if err := m.mon.scanOnce(); err != nil {
+	if err := m.mon.scanOnce(context.Background()); err != nil {
 		t.Fatalf("scanOnce: %v", err)
 	}
 
@@ -175,11 +175,11 @@ func TestPausedSkipsDetection(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.txt"), "x")
 	m.as.putSettings(Settings{ProtectedDirs: []string{dir}, IntervalSec: 60, Paused: true})
-	states, _ := scanDirs([]string{dir}, nil)
+	states, _ := scanDirs(context.Background(), []string{dir}, nil)
 	m.as.replaceBaseline(states)
 
 	writeFile(t, filepath.Join(dir, "a.txt"), "tampered")
-	if err := m.mon.scanOnce(); err != nil {
+	if err := m.mon.scanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	evs, _ := m.as.listEvents(10)
@@ -226,7 +226,7 @@ func TestStartStopNoLeak(t *testing.T) {
 }
 
 func TestScanDirsRejectsNonexistent(t *testing.T) {
-	_, err := scanDirs([]string{"/no/such/path/xpanel-test"}, nil)
+	_, err := scanDirs(context.Background(), []string{"/no/such/path/xpanel-test"}, nil)
 	if err == nil {
 		t.Fatal("scanDirs must error on nonexistent protected dir")
 	}
@@ -246,7 +246,33 @@ func TestScanDirsRejectsSymlinkEscape(t *testing.T) {
 	}
 	// SafeJoin(link, ".") resolves link's real path; since link != its resolved
 	// target, escape is detected.
-	if _, err := scanDirs([]string{link}, nil); err == nil {
+	if _, err := scanDirs(context.Background(), []string{link}, nil); err == nil {
 		t.Fatal("symlinked protected dir must be rejected")
+	}
+}
+
+// scanOnce 在扫描中途遇 ctx 取消必须及时返回。这保证 stop()(cancel+<-done)
+// 不被慢扫描阻塞,从而持锁调 stop 的 Manager 不会冻结全模块启停。
+func TestScanOnceReturnsPromptlyOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 2000; i++ {
+		writeFile(t, filepath.Join(dir, "f"+itoa(i)+".bin"), "payload-payload-payload")
+	}
+	m := newTestModule(t, "admin", new(int))
+	m.as.putSettings(Settings{ProtectedDirs: []string{dir}, IntervalSec: 60, Paused: false})
+	states, _ := scanDirs(context.Background(), []string{dir}, nil)
+	m.as.replaceBaseline(states)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 取消后扫描应在文件间立即 bail
+	done := make(chan error, 1)
+	go func() { done <- m.mon.scanOnce(ctx) }()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("scanOnce on canceled ctx = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("scanOnce did not bail on cancel: blocked past 5s")
 	}
 }

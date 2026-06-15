@@ -153,7 +153,7 @@ func (m *Module) handleRebuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings unavailable", http.StatusInternalServerError)
 		return
 	}
-	states, err := scanDirs(s.ProtectedDirs, s.ExcludeRules)
+	states, err := scanDirs(r.Context(), s.ProtectedDirs, s.ExcludeRules)
 	if err != nil {
 		log.Printf("antitamper: rebuild scan: %v", err)
 		http.Error(w, "scan failed", http.StatusInternalServerError)
@@ -199,14 +199,14 @@ func (m *Module) handleToggle(w http.ResponseWriter, r *http.Request) {
 
 // scanDirs 扫描多个受保护目录,合并指纹。各目录须为已存在的绝对路径,
 // 经 SafeJoin(dir, ".") 确认目录自身不经符号链接逃逸自身根。
-func scanDirs(dirs, exclude []string) (map[string]FileState, error) {
+func scanDirs(ctx context.Context, dirs, exclude []string) (map[string]FileState, error) {
 	all := map[string]FileState{}
 	for _, dir := range dirs {
 		// SafeJoin 以 dir 为根、"." 为相对路径,校验 dir 已存在且未经软链逃逸。
 		if _, err := system.SafeJoin(dir, "."); err != nil {
 			return nil, err
 		}
-		states, err := ScanTree(dir, exclude)
+		states, err := ScanTree(ctx, dir, exclude)
 		if err != nil {
 			return nil, err
 		}

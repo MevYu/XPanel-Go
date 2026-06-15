@@ -68,7 +68,7 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/sites", m.handleList)                               // 只读
 	r.Post("/sites", m.handleCreate)                            // 写:operator+
 	r.Get("/sites/{id}", m.handleGet)                           // 只读:含生成的配置
-	r.Put("/sites/{id}/config", m.handleEditConfig)             // 写:operator+,改配置并校验
+	r.Put("/sites/{id}/config", m.handleEditConfig)             // 危险写:原始配置可绕白名单,需 admin + 二次确认
 	r.Post("/sites/{id}/{verb:enable|disable}", m.handleToggle) // 写;disable 危险
 	r.Delete("/sites/{id}", m.handleDelete)                     // 危险写:admin + 二次确认
 	r.Get("/settings", m.handleGetSettings)                     // 只读
@@ -158,9 +158,16 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEditConfig 替换站点配置:写盘 → nginx -t → reload。校验失败回滚旧配置。
+// 写入的是原始 nginx 配置,可绕过建站白名单(如 location 读任意文件),
+// 故与 delete/disable 同危险级:需 admin + 二次确认。
 func (m *Module) handleEditConfig(w http.ResponseWriter, r *http.Request) {
-	uid, ok := m.requireWriter(w, r)
-	if !ok {
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
+	uid, role := m.deps.Principal(r)
+	if role != "admin" {
+		http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
 		return
 	}
 	id, ok := parseID(w, r)

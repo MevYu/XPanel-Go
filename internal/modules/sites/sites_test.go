@@ -264,16 +264,56 @@ func TestSettingsPutValidatedAndUsed(t *testing.T) {
 
 func TestEditConfigRejectedKeepsOld(t *testing.T) {
 	ng := newMockNginx()
-	m, _ := newTestModule(t, "operator", ng)
+	m, _ := newTestModule(t, "admin", ng)
 	id := seedSite(t, m)
 	orig := ng.configs["example.com"]
 	ng.testErr = errNginxTest // 新配置 nginx -t 失败
-	rec := do(m, "PUT", "/sites/"+itoa(id)+"/config", map[string]string{"config": "server { bad }"}, nil)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/config",
+		map[string]string{"config": "server { bad }"}, map[string]string{"X-Confirm-Danger": "yes"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("rejected edit should 400, got %d", rec.Code)
 	}
 	if ng.configs["example.com"] != orig {
 		t.Error("rejected edit must restore original config")
+	}
+}
+
+// 写原始 nginx 配置可绕过建站白名单(如 location root /; 读 /etc/passwd),
+// 属危险操作:operator 即便提交确认头也必须 403。
+func TestEditConfigRequiresConfirmAndAdmin(t *testing.T) {
+	ng := newMockNginx()
+	m, audited := newTestModule(t, "operator", ng)
+	id := seedSite(t, m)
+	orig := ng.configs["example.com"]
+	*audited = 0
+	raw := map[string]string{"config": "server { listen 80; location / { root /; } }"}
+
+	// operator 无确认头 → 428
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/config", raw, nil)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("edit without confirm should 428, got %d", rec.Code)
+	}
+	// operator 带确认头但非 admin → 403
+	rec = do(m, "PUT", "/sites/"+itoa(id)+"/config", raw, map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator edit should 403, got %d", rec.Code)
+	}
+	if ng.configs["example.com"] != orig {
+		t.Error("forbidden edit must not change config")
+	}
+	if *audited != 0 {
+		t.Error("forbidden edit must not audit")
+	}
+}
+
+func TestEditConfigAdminConfirmedSucceeds(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "admin", ng)
+	id := seedSite(t, m)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/config",
+		map[string]string{"config": "server { listen 80; }"}, map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin confirmed edit should 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }
 

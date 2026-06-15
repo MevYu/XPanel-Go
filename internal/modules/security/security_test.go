@@ -280,3 +280,22 @@ func TestSSHDReloadValidatesFirst(t *testing.T) {
 		t.Errorf("expected 1 reload, got %d", mock.reloads)
 	}
 }
+
+// jail 名以 "-" 开头会被 fail2ban-client 当 flag(参数注入),必须拒绝。
+func TestValidJailNameRejectsLeadingDash(t *testing.T) {
+	rejected := []string{"--help", "-h", "--version", "-jail", "j ail", "j;ls", "j/etc", "j$x"}
+	for _, s := range rejected {
+		if validJailName(s) {
+			t.Errorf("validJailName(%q) = true, want false", s)
+		}
+	}
+	accepted := []string{"", "sshd", "nginx-http-auth", "jail_1", "Abc123", "_priv"}
+	for _, s := range accepted {
+		if !validJailName(s) {
+			t.Errorf("validJailName(%q) = false, want true", s)
+		}
+	}
+	if validJailName(strings.Repeat("a", 65)) {
+		t.Error("validJailName must reject names longer than 64")
+	}
+}

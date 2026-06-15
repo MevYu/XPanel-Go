@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -455,17 +456,16 @@ func (m *Module) handleLogins(w http.ResponseWriter, r *http.Request) {
 
 func jailParam(r *http.Request) string { return r.URL.Query().Get("jail") }
 
-// validJailName 限制 jail 名为安全字符,杜绝命令注入(参数虽走数组,仍防御)。
+// jailNameRe 要求 jail 名首字符为字母/数字/下划线,杜绝 "-" 开头被 fail2ban-client
+// 当成 flag(如 "--help")造成的参数注入。
+var jailNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
+
+// validJailName 限制 jail 名为安全字符且不以 "-" 开头(防参数注入)。
 func validJailName(s string) bool {
 	if s == "" {
 		return true // 空表示总览,合法
 	}
-	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-			return false
-		}
-	}
-	return len(s) <= 64
+	return len(s) <= 64 && jailNameRe.MatchString(s)
 }
 
 // confirmed 检查危险操作的二次确认标记。
