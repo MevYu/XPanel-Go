@@ -28,12 +28,15 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/modules/files"
 	"github.com/MevYu/XPanel-Go/internal/modules/firewall"
 	"github.com/MevYu/XPanel-Go/internal/modules/ftp"
+	"github.com/MevYu/XPanel-Go/internal/modules/java"
 	"github.com/MevYu/XPanel-Go/internal/modules/malscan"
+	"github.com/MevYu/XPanel-Go/internal/modules/migration"
 	"github.com/MevYu/XPanel-Go/internal/modules/nodejs"
 	"github.com/MevYu/XPanel-Go/internal/modules/php"
 	"github.com/MevYu/XPanel-Go/internal/modules/python"
 	"github.com/MevYu/XPanel-Go/internal/modules/security"
 	"github.com/MevYu/XPanel-Go/internal/modules/service"
+	"github.com/MevYu/XPanel-Go/internal/modules/sitemonitor"
 	"github.com/MevYu/XPanel-Go/internal/modules/sites"
 	"github.com/MevYu/XPanel-Go/internal/modules/ssl"
 	"github.com/MevYu/XPanel-Go/internal/modules/supervisor"
@@ -184,6 +187,18 @@ func main() {
 		Audit:     auditFn,
 	}))
 	reg.Register(alert.New(cfg.JWTSecret, st, alert.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(java.New(st, java.NewSupervisorManager(), java.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(sitemonitor.New(st, nil, sitemonitor.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(migration.New(st, migration.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
 	}))
