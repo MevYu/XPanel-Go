@@ -2,6 +2,7 @@ package module
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,5 +52,62 @@ func TestModulesListAndToggle(t *testing.T) {
 	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/nope/enable", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("unknown module enable should 404, got %d", rec.Code)
+	}
+}
+
+// routedStartStop 把 startStopModule 暴露为带路由的 Module,供 ModuleAPI 挂载。
+type routedStartStop struct{ *startStopModule }
+
+func (routedStartStop) Routes(Router) {}
+
+func TestDisableValidationErrorShown(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	defer st.Close()
+	reg := NewRegistry()
+	m := &startStopModule{fakeModule: fakeModule{id: "dash", alwaysOn: true}}
+	reg.Register(routedStartStop{m})
+	mgr := NewManager(reg, st)
+	if err := mgr.Restore(); err != nil { // AlwaysOn 模块经 Restore 启用
+		t.Fatalf("restore: %v", err)
+	}
+	if !mgr.IsEnabled("dash") {
+		t.Fatal("dash should be enabled after restore")
+	}
+
+	root := chi.NewRouter()
+	root.Mount("/api/modules", ModuleAPI(reg, mgr))
+
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/dash/disable", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("disable always-on should 409, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "always-on") {
+		t.Errorf("validation error should be shown to user, body: %q", rec.Body.String())
+	}
+}
+
+func TestEnableInternalErrorMasked(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	defer st.Close()
+	reg := NewRegistry()
+	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, healthErr: errors.New("/secret/path missing")}
+	reg.Register(routedStartStop{m})
+	mgr := NewManager(reg, st)
+
+	root := chi.NewRouter()
+	root.Mount("/api/modules", ModuleAPI(reg, mgr))
+
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/svc/enable", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("enable health-check failure should 409, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "/secret/path") {
+		t.Errorf("internal error leaked to client: %q", body)
+	}
+	if !strings.Contains(body, "module operation failed") {
+		t.Errorf("expected generic message, got: %q", body)
 	}
 }

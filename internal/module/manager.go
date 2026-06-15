@@ -9,6 +9,11 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/store"
 )
 
+// ValidationError 表示用户可安全展示的校验失败(未知 id / 依赖未满足 / AlwaysOn / 被依赖占用),不含内部敏感信息。
+type ValidationError struct{ Msg string }
+
+func (e *ValidationError) Error() string { return e.Msg }
+
 // Manager 编排模块启用/停用:依赖校验、健康检查、Start/Stop、状态持久化与重启恢复。
 type Manager struct {
 	reg   *Registry
@@ -32,7 +37,7 @@ func (mgr *Manager) IsEnabled(id string) bool {
 func (mgr *Manager) Enable(id string) error {
 	m, ok := mgr.reg.Get(id)
 	if !ok {
-		return fmt.Errorf("module: unknown id %q", id)
+		return &ValidationError{Msg: fmt.Sprintf("module: unknown id %q", id)}
 	}
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
@@ -41,7 +46,7 @@ func (mgr *Manager) Enable(id string) error {
 	}
 	for _, dep := range m.Meta().Requires {
 		if !mgr.enabled[dep] {
-			return fmt.Errorf("module %q requires %q to be enabled first", id, dep)
+			return &ValidationError{Msg: fmt.Sprintf("module %q requires %q to be enabled first", id, dep)}
 		}
 	}
 	if err := m.HealthCheck(); err != nil {
@@ -62,10 +67,10 @@ func (mgr *Manager) Enable(id string) error {
 func (mgr *Manager) Disable(id string) error {
 	m, ok := mgr.reg.Get(id)
 	if !ok {
-		return fmt.Errorf("module: unknown id %q", id)
+		return &ValidationError{Msg: fmt.Sprintf("module: unknown id %q", id)}
 	}
 	if m.Meta().AlwaysOn {
-		return fmt.Errorf("module %q is always-on and cannot be disabled", id)
+		return &ValidationError{Msg: fmt.Sprintf("module %q is always-on and cannot be disabled", id)}
 	}
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
@@ -78,7 +83,7 @@ func (mgr *Manager) Disable(id string) error {
 		}
 		for _, dep := range other.Meta().Requires {
 			if dep == id {
-				return fmt.Errorf("module %q is required by %q", id, other.Meta().ID)
+				return &ValidationError{Msg: fmt.Sprintf("module %q is required by %q", id, other.Meta().ID)}
 			}
 		}
 	}

@@ -2,6 +2,8 @@ package module
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -37,7 +39,13 @@ func ModuleAPI(reg *Registry, mgr *Manager) http.Handler {
 			return
 		}
 		if err := mgr.Enable(id); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+			var ve *ValidationError
+			if errors.As(err, &ve) {
+				http.Error(w, ve.Msg, http.StatusConflict)
+			} else {
+				log.Printf("module enable %q: %v", id, err)
+				http.Error(w, "module operation failed", http.StatusConflict)
+			}
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -50,7 +58,13 @@ func ModuleAPI(reg *Registry, mgr *Manager) http.Handler {
 			return
 		}
 		if err := mgr.Disable(id); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+			var ve *ValidationError
+			if errors.As(err, &ve) {
+				http.Error(w, ve.Msg, http.StatusConflict)
+			} else {
+				log.Printf("module disable %q: %v", id, err)
+				http.Error(w, "module operation failed", http.StatusConflict)
+			}
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
