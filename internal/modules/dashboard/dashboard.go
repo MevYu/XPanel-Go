@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -53,7 +54,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close(websocket.StatusNormalClosure, "")
 
-	ctx := r.Context()
+	// CloseRead 起一个读 goroutine 处理 close/ping/pong 控制帧,
+	// 并在客户端断开时 cancel 返回的 ctx —— 使下面的 select 能即时响应断开。
+	ctx := c.CloseRead(r.Context())
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -63,6 +66,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 			snap, err := system.Snapshot()
 			if err != nil {
+				log.Printf("dashboard stream: metrics snapshot failed: %v", err)
 				continue
 			}
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
