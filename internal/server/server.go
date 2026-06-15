@@ -74,7 +74,7 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 	// 模块管理 API 与模块路由都需要登录;模块路由再各自做 RBAC。
 	r.Group(func(r chi.Router) {
 		r.Use(RequireAuth(parse))
-		r.Mount("/api/modules", module.ModuleAPI(reg, mgr))
+		r.Mount("/api/modules", module.ModuleAPI(reg, mgr, PrincipalFromRequest))
 		module.Mount(r, reg, mgr)
 	})
 

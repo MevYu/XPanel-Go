@@ -12,6 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// adminPrincipal 是测试用 principal stub,默认以 admin 身份放行变更接口。
+func adminPrincipal(*http.Request) (int64, string) { return 1, "admin" }
+
 func TestModulesListAndToggle(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	defer st.Close()
@@ -20,7 +23,7 @@ func TestModulesListAndToggle(t *testing.T) {
 	mgr := NewManager(reg, st)
 
 	root := chi.NewRouter()
-	root.Mount("/api/modules", ModuleAPI(reg, mgr))
+	root.Mount("/api/modules", ModuleAPI(reg, mgr, adminPrincipal))
 
 	// list:svc 存在且未启用
 	rec := httptest.NewRecorder()
@@ -55,6 +58,27 @@ func TestModulesListAndToggle(t *testing.T) {
 	}
 }
 
+func TestEnableRequiresAdmin(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	defer st.Close()
+	reg := NewRegistry()
+	reg.Register(routedModule{fakeModule{id: "svc"}})
+	mgr := NewManager(reg, st)
+
+	operator := func(*http.Request) (int64, string) { return 2, "operator" }
+	root := chi.NewRouter()
+	root.Mount("/api/modules", ModuleAPI(reg, mgr, operator))
+
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/svc/enable", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin enable should 403, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if mgr.IsEnabled("svc") {
+		t.Error("svc must not be enabled by non-admin")
+	}
+}
+
 // routedStartStop 把 startStopModule 暴露为带路由的 Module,供 ModuleAPI 挂载。
 type routedStartStop struct{ *startStopModule }
 
@@ -75,7 +99,7 @@ func TestDisableValidationErrorShown(t *testing.T) {
 	}
 
 	root := chi.NewRouter()
-	root.Mount("/api/modules", ModuleAPI(reg, mgr))
+	root.Mount("/api/modules", ModuleAPI(reg, mgr, adminPrincipal))
 
 	rec := httptest.NewRecorder()
 	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/dash/disable", nil))
@@ -96,7 +120,7 @@ func TestEnableInternalErrorMasked(t *testing.T) {
 	mgr := NewManager(reg, st)
 
 	root := chi.NewRouter()
-	root.Mount("/api/modules", ModuleAPI(reg, mgr))
+	root.Mount("/api/modules", ModuleAPI(reg, mgr, adminPrincipal))
 
 	rec := httptest.NewRecorder()
 	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/svc/enable", nil))

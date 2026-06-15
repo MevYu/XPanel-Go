@@ -16,8 +16,9 @@ type moduleView struct {
 	Nav     []NavItem `json:"nav"`
 }
 
-// ModuleAPI 返回模块管理路由:列表 + 启用/停用。调用方负责在外层套认证/RBAC 中间件。
-func ModuleAPI(reg *Registry, mgr *Manager) http.Handler {
+// ModuleAPI 返回模块管理路由:列表对任意已认证角色开放,启用/停用要求 admin。
+// principal 从请求取登录主体 (userID, role),由调用方注入以免 module 反向依赖 server。
+func ModuleAPI(reg *Registry, mgr *Manager, principal func(*http.Request) (int64, string)) http.Handler {
 	r := chi.NewRouter()
 
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -38,6 +39,10 @@ func ModuleAPI(reg *Registry, mgr *Manager) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		if _, role := principal(r); role != "admin" {
+			http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
+			return
+		}
 		if err := mgr.Enable(id); err != nil {
 			var ve *ValidationError
 			if errors.As(err, &ve) {
@@ -55,6 +60,10 @@ func ModuleAPI(reg *Registry, mgr *Manager) http.Handler {
 		id := chi.URLParam(r, "id")
 		if _, ok := reg.Get(id); !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if _, role := principal(r); role != "admin" {
+			http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
 			return
 		}
 		if err := mgr.Disable(id); err != nil {
