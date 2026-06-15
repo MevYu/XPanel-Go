@@ -47,26 +47,38 @@ func (s *Service) Register(username, password, role string) error {
 }
 
 // Login 校验密码,成功签发 access+refresh,失败计入锁定。lockKey = username@ip。
+// 不涉及 2FA 的调用方仍可直接用此方法。需要 2FA 门的调用方改用 VerifyPassword + IssueFor。
 func (s *Service) Login(username, password, ip string) (Tokens, error) {
+	u, err := s.VerifyPassword(username, password, ip)
+	if err != nil {
+		return Tokens{}, err
+	}
+	_ = s.store.WriteAudit(&u.ID, "login.success", "", ip)
+	return s.IssueFor(u.ID, u.Role)
+}
+
+// VerifyPassword 只校验用户名+密码,成功返回用户;失败计入锁定并写 login.failure 审计。
+// 不签发 token、不写 login.success(留给调用方在通过后续门槛后写)。
+// 防枚举(时序抹平)与登录锁定语义与原 Login 一致。
+func (s *Service) VerifyPassword(username, password, ip string) (store.User, error) {
 	key := username + "@" + ip
 	if s.lockout.Locked(key) {
-		return Tokens{}, ErrLockedOut
+		return store.User{}, ErrLockedOut
 	}
 	u, err := s.store.GetUserByUsername(username)
 	if err != nil {
 		VerifyPassword(dummyHash(), password) // 抹平时序,结果丢弃
 		s.lockout.Fail(key)
 		_ = s.store.WriteAudit(nil, "login.failure", username, ip)
-		return Tokens{}, ErrInvalidCredentials
+		return store.User{}, ErrInvalidCredentials
 	}
 	if !VerifyPassword(u.PassHash, password) {
 		s.lockout.Fail(key)
 		_ = s.store.WriteAudit(nil, "login.failure", username, ip)
-		return Tokens{}, ErrInvalidCredentials
+		return store.User{}, ErrInvalidCredentials
 	}
 	s.lockout.Reset(key)
-	_ = s.store.WriteAudit(&u.ID, "login.success", "", ip)
-	return s.issue(u.ID, u.Role)
+	return u, nil
 }
 
 // Refresh 旋转:校验旧 refresh → 原子消费 → 只有赢者发新对。
@@ -88,7 +100,7 @@ func (s *Service) Refresh(refresh, ip string) (Tokens, error) {
 		return Tokens{}, ErrInvalidCredentials
 	}
 	_ = s.store.WriteAudit(&user.ID, "token.refresh", "", ip)
-	return s.issue(user.ID, user.Role)
+	return s.IssueFor(user.ID, user.Role)
 }
 
 func (s *Service) Logout(refresh, ip string) error {
@@ -96,7 +108,13 @@ func (s *Service) Logout(refresh, ip string) error {
 	return s.store.RevokeRefreshToken(refresh)
 }
 
-func (s *Service) issue(userID int64, role string) (Tokens, error) {
+// Audit 写一条登录相关审计。供拆分登录流程(密码门 + 2FA 门)的调用方记录最终结果。
+func (s *Service) Audit(userID *int64, action, detail, ip string) {
+	_ = s.store.WriteAudit(userID, action, detail, ip)
+}
+
+// IssueFor 为已认证用户签发 access+refresh,不做任何鉴权。调用方负责确保身份已校验。
+func (s *Service) IssueFor(userID int64, role string) (Tokens, error) {
 	access, err := s.jwt.Issue(userID, role)
 	if err != nil {
 		return Tokens{}, err

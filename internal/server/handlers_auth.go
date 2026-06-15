@@ -8,13 +8,20 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/auth"
 )
 
+// loginTOTPVerifier 校验某用户登录时的 2FA。enabled 表示该用户是否启用 2FA,
+// ok 表示提供的 code 是否通过。宿主注入以避免 server 直接依赖 users 内部细节。
+type loginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err error)
+
 type authHandlers struct {
 	svc *auth.Service
+	// totp 为登录时的 2FA 校验器;nil 表示不启用登录 2FA 门(如基础 server.New)。
+	totp loginTOTPVerifier
 }
 
 type loginReq struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	TOTP     string `json:"totp"` // 可选;用户启用 2FA 时必填的 6 位码
 }
 
 type tokenResp struct {
@@ -32,7 +39,26 @@ func (a *authHandlers) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		ip = r.RemoteAddr
 	}
-	tok, err := a.svc.Login(req.Username, req.Password, ip)
+	u, err := a.svc.VerifyPassword(req.Username, req.Password, ip)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// 密码已对(锁定已 Reset)。2FA 缺失/错误不计入锁定,避免锁死正常用户。
+	if a.totp != nil {
+		enabled, ok, verr := a.totp(u.ID, req.TOTP)
+		if verr != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if enabled && !ok {
+			a.svc.Audit(&u.ID, "login.2fa_required", "", ip)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "2fa_required"})
+			return
+		}
+	}
+	a.svc.Audit(&u.ID, "login.success", "", ip)
+	tok, err := a.svc.IssueFor(u.ID, u.Role)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

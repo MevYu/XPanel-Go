@@ -206,7 +206,10 @@ func main() {
 	if err := mgr.Restore(); err != nil {
 		log.Fatalf("module restore: %v", err)
 	}
-	h := server.NewWithModules(svc, jm, reg, mgr)
+	loginTOTP := func(userID int64, code string) (enabled, ok bool, err error) {
+		return users.VerifyLoginTOTP(st, cfg.JWTSecret, userID, code)
+	}
+	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,

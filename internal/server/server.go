@@ -45,8 +45,13 @@ func New(svc *auth.Service, jwt *auth.JWTManager) http.Handler {
 	return r
 }
 
+// LoginTOTPVerifier 在登录密码通过后校验该用户的 2FA。enabled=用户是否启用 2FA,
+// ok=code 是否通过。宿主用 users.VerifyLoginTOTP 适配并注入,避免 server 依赖其内部。
+type LoginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err error)
+
 // NewWithModules 在基础路由上接入模块系统:模块管理 API + 各模块路由(带启用门)。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager) http.Handler {
+// totp 为登录时的 2FA 校验器;传 nil 则不启用登录 2FA 门。
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier) http.Handler {
 	r := chi.NewRouter()
 	r.Use(SecurityHeaders)
 	r.Use(NewRateLimiter(60).Middleware)
@@ -56,7 +61,7 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	ah := &authHandlers{svc: svc}
+	ah := &authHandlers{svc: svc, totp: loginTOTPVerifier(totp)}
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/login", ah.login)
 		r.Post("/refresh", ah.refresh)
