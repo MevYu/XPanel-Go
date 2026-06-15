@@ -2,6 +2,7 @@ package alert
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MevYu/XPanel-Go/internal/system"
@@ -152,6 +153,10 @@ func validateRule(r Rule) error {
 	}
 	if r.Name == "" {
 		return fmt.Errorf("alert: name required")
+	}
+	// 规则名进 SMTP Subject 头,含 CR/LF 可注入额外邮件头(如 Bcc)外泄。
+	if strings.ContainsAny(r.Name, "\r\n") {
+		return fmt.Errorf("alert: name must not contain newlines")
 	}
 	return nil
 }

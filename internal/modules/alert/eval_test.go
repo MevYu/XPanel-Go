@@ -35,6 +35,8 @@ func TestValidateRule(t *testing.T) {
 		{Name: "x", Metric: "cpu", Comparator: "gt", ChannelID: 0},
 		{Name: "", Metric: "cpu", Comparator: "gt", ChannelID: 1},
 		{Name: "x", Metric: "cpu", Comparator: "gt", ChannelID: 1, DurationSec: -1},
+		{Name: "alert\r\nBcc: attacker@evil.com", Metric: "cpu", Comparator: "gt", ChannelID: 1}, // CRLF header injection
+		{Name: "alert\nfoo", Metric: "cpu", Comparator: "gt", ChannelID: 1},                      // bare LF
 	}
 	for i, r := range bad {
 		if err := validateRule(r); err == nil {
