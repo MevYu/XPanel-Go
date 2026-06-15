@@ -43,6 +43,33 @@ func TestValidPassword(t *testing.T) {
 	}
 }
 
+func TestValidVirtualID(t *testing.T) {
+	ok := []string{"1000", "5000", "65534", "ftpuser", "ftpgroup", "www-data", "svc.acct"}
+	for _, s := range ok {
+		if !validVirtualID(s) {
+			t.Errorf("validVirtualID(%q) = false, want true", s)
+		}
+	}
+	bad := []string{
+		"",      // 空由默认兜底,非合法显式值
+		"0",     // root
+		"1",     // 系统保留
+		"999",   // 低于非特权阈值
+		"-1",    // 负数
+		"0; rm", // 注入
+		"1000 ", // 含空白
+		"ro ot", // 含空白
+		"a/b",   // 路径分隔符
+		"$(id)", // shell 元字符
+		".svc",  // 首字符非字母
+	}
+	for _, s := range bad {
+		if validVirtualID(s) {
+			t.Errorf("validVirtualID(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestResolveHomeRejectsEscape(t *testing.T) {
 	base := "/home/ftp"
 	bad := []string{

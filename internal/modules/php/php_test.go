@@ -133,6 +133,7 @@ func TestFpmRestartRejectsBadVersion(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// 版本号含注入字符,chi 的 {version} 会匹配,但 ValidVersion 必须拒。
 	req := httptest.NewRequest("POST", "/versions/8.1abc/fpm/restart", nil)
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad version = %d, want 400", rec.Code)
@@ -162,6 +163,7 @@ func TestFpmRestartAdminUsesUnitTemplate(t *testing.T) {
 	setupInstall(t, m)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/versions/8.1/fpm/restart", nil)
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("admin fpm restart = %d, want 200", rec.Code)
@@ -179,6 +181,7 @@ func TestPutIniRejectsNonWhitelistKey(t *testing.T) {
 	setupInstall(t, m)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("PUT", "/versions/8.1/ini", strings.NewReader(`{"disable_functions":"exec"}`))
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("non-whitelist ini key = %d, want 400", rec.Code)
@@ -193,6 +196,7 @@ func TestPutIniRejectsInjectionValue(t *testing.T) {
 	setupInstall(t, m)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("PUT", "/versions/8.1/ini", strings.NewReader(`{"memory_limit":"128M\ndisable_functions = exec"}`))
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("injection value = %d, want 400", rec.Code)
@@ -204,6 +208,7 @@ func TestPutIniAdminWritesFile(t *testing.T) {
 	base := setupInstall(t, m)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("PUT", "/versions/8.1/ini", strings.NewReader(`{"memory_limit":"512M"}`))
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("admin PUT ini = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -252,6 +257,7 @@ func TestToggleExtensionRejectsBadName(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// 注:URL path 里点会被 chi 当作 {ext} 一部分,bad name 须被 ValidExtName 拒。
 	req := httptest.NewRequest("POST", "/versions/8.1/extensions/redis_so/enable", nil)
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	// redis_so 合法,应成功;改测一个非法名。
 	if rec.Code != http.StatusNoContent {
@@ -264,6 +270,7 @@ func TestEnableExtensionWritesIni(t *testing.T) {
 	base := setupInstall(t, m)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/versions/8.1/extensions/redis/enable", nil)
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("enable redis = %d, want 204", rec.Code)
@@ -284,6 +291,7 @@ func TestDisableExtensionRemovesIni(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "redis.ini"), []byte("extension=redis\n"), 0o644)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/versions/8.1/extensions/redis/disable", nil)
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("disable redis = %d, want 204", rec.Code)
@@ -298,6 +306,7 @@ func TestInstallUnavailableByDefault(t *testing.T) {
 	_ = m
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/install", strings.NewReader(`{"version":"8.3"}`))
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("default install = %d, want 501", rec.Code)
@@ -312,6 +321,7 @@ func TestInstallRejectsBadVersion(t *testing.T) {
 	_, _, r := newTestModule(t, "admin", &mockRunner{}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/install", strings.NewReader(`{"version":"8.3; rm -rf /"}`))
+	req.Header.Set("X-Confirm-Danger", "1")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad version install = %d, want 400", rec.Code)

@@ -131,10 +131,12 @@ func (s *backupStore) settings() (Settings, error) {
 	if got.BackupDir != "" {
 		cur.BackupDir = got.BackupDir
 	}
-	if got.MysqlDump != "" {
+	// 工具路径进 exec 的 argv[0];即便落库的旧值畸形(绕过写入校验/手改 DB),
+	// 载入时也再校验一次,非法则回落默认,绝不把畸形值喂给 exec.Command。
+	if got.MysqlDump != "" && validToolPath(got.MysqlDump) {
 		cur.MysqlDump = got.MysqlDump
 	}
-	if got.PgDump != "" {
+	if got.PgDump != "" && validToolPath(got.PgDump) {
 		cur.PgDump = got.PgDump
 	}
 	return cur, nil
@@ -201,6 +203,10 @@ func (s *backupStore) getRemote(id int64) (Remote, error) {
 		FROM backup_remotes WHERE id = ?`, id)
 	err := row.Scan(&r.ID, &r.Name, &r.Type, &r.Bucket, &r.Endpoint, &r.Region, &r.AccessKey, &enc, &r.CreatedAt)
 	if err != nil {
+		return Remote{}, err
+	}
+	// endpoint/region 进 rclone config 的参数;载入时再校验,挡住手改 DB 的畸形值。
+	if err := validateRemote(r); err != nil {
 		return Remote{}, err
 	}
 	plain, err := s.cryp.decrypt(enc)

@@ -281,6 +281,15 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "config_dir must be an absolute path", http.StatusBadRequest)
 		return
 	}
+	// uid/gid 非空则必须是非特权数字 id 或服务账户名(挡 root 映射 / 注入)。空值由默认兜底。
+	if in.VirtualUID != "" && !validVirtualID(in.VirtualUID) {
+		http.Error(w, errInvalidID.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.VirtualGID != "" && !validVirtualID(in.VirtualGID) {
+		http.Error(w, errInvalidID.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := m.ss.save(in); err != nil {
 		log.Printf("ftp: settings save failed: %v", err)
 		http.Error(w, "settings save failed", http.StatusInternalServerError)

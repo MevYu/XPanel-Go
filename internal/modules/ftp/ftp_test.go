@@ -303,6 +303,47 @@ func TestNewAccountHomeUsesUpdatedBase(t *testing.T) {
 	}
 }
 
+func TestPutSettingsRejectsPrivilegedID(t *testing.T) {
+	m := newTestModule(t, "admin", newMockBackend(), &auditRec{})
+	r := router(m)
+	bad := []string{
+		`{"virtual_uid":"0"}`,         // root
+		`{"virtual_gid":"0"}`,         // root group
+		`{"virtual_uid":"999"}`,       // 低于非特权阈值
+		`{"virtual_uid":"0; rm -rf"}`, // 注入
+		`{"virtual_gid":"a/b"}`,       // 路径分隔符
+	}
+	for _, body := range bad {
+		rec := do(r, "PUT", "/settings", body, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("PUT settings %s = %d, want 400", body, rec.Code)
+		}
+	}
+	// 合法非特权数字 / 服务账户名放行。
+	if rec := do(r, "PUT", "/settings", `{"virtual_uid":"1000","virtual_gid":"www-data"}`, nil); rec.Code != http.StatusOK {
+		t.Errorf("valid uid/gid = %d, want 200", rec.Code)
+	}
+}
+
+func TestEffectiveDropsPrivilegedPersistedID(t *testing.T) {
+	m := newTestModule(t, "admin", newMockBackend(), &auditRec{})
+	// 模拟手改 DB / 旧畸形值绕过写入校验:把 uid 直接写成 0(root)。
+	if _, err := m.ss.db.Exec(`INSERT INTO ftp_settings (id, home_base, config_dir, virtual_uid, virtual_gid)
+		VALUES (1, '', '', '0', '0') ON CONFLICT(id) DO UPDATE SET virtual_uid=excluded.virtual_uid, virtual_gid=excluded.virtual_gid`); err != nil {
+		t.Fatal(err)
+	}
+	eff, err := m.ss.effective()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.VirtualUID == "0" || eff.VirtualGID == "0" {
+		t.Fatalf("privileged persisted uid/gid must fall back to default, got uid=%q gid=%q", eff.VirtualUID, eff.VirtualGID)
+	}
+	if eff.VirtualUID != "ftpuser" || eff.VirtualGID != "ftpgroup" {
+		t.Errorf("expected default uid/gid, got uid=%q gid=%q", eff.VirtualUID, eff.VirtualGID)
+	}
+}
+
 func TestHealthCheckReflectsBackend(t *testing.T) {
 	be := newMockBackend()
 	m := newTestModule(t, "admin", be, &auditRec{})

@@ -69,15 +69,15 @@ func (m *Module) Routes(r module.Router) {
 	r.Put("/settings", m.handlePutSettings) // 写:admin
 
 	r.Get("/versions", m.handleListVersions) // 只读:检测已安装版本
-	r.Post("/install", m.handleInstall)      // 写:admin,安装新版本
+	r.Post("/install", m.handleInstall)      // 危险:admin + X-Confirm-Danger,安装新版本
 
 	r.Get("/versions/{version}/ini", m.handleGetIni) // 只读:php.ini 常用项
-	r.Put("/versions/{version}/ini", m.handlePutIni) // 写:admin,编辑 php.ini
+	r.Put("/versions/{version}/ini", m.handlePutIni) // 危险:admin + X-Confirm-Danger,编辑 php.ini
 
 	r.Get("/versions/{version}/extensions", m.handleListExtensions)                             // 只读
-	r.Post("/versions/{version}/extensions/{ext}/{op:enable|disable}", m.handleToggleExtension) // 写:admin
+	r.Post("/versions/{version}/extensions/{ext}/{op:enable|disable}", m.handleToggleExtension) // 危险:admin + X-Confirm-Danger
 
-	r.Post("/versions/{version}/fpm/{verb:start|stop|restart}", m.handleFpmAction) // 写:admin
+	r.Post("/versions/{version}/fpm/{verb:start|stop|restart}", m.handleFpmAction) // 危险:admin + X-Confirm-Danger
 }
 
 // requireAdmin 校验 admin 角色。失败时已写 403,返回 ok=false。
@@ -89,6 +89,9 @@ func (m *Module) requireAdmin(w http.ResponseWriter, r *http.Request) (int64, bo
 	}
 	return uid, true
 }
+
+// confirmed 检查危险操作的二次确认标记(与其它模块语义一致)。
+func confirmed(r *http.Request) bool { return r.Header.Get("X-Confirm-Danger") != "" }
 
 // versionParam 取并校验 URL 里的 {version}。非法时已写 400,返回 ok=false。
 func versionParam(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -163,6 +166,10 @@ func (m *Module) handleInstall(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
 	var body struct {
 		Version string `json:"version"`
 	}
@@ -180,12 +187,13 @@ func (m *Module) handleInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	m.deps.Audit(&uid, "php.install", body.Version+" "+outcome, clientIP(r))
 	if err != nil {
-		log.Printf("php: install %q failed: %v", body.Version, err)
+		// out 含命令原始输出(路径/内部状态),只留服务端,不回传客户端。
+		log.Printf("php: install %q failed: %v; output: %s", body.Version, err, out)
 		if errors.Is(err, errInstallUnavailable) {
 			http.Error(w, "install backend unavailable", http.StatusNotImplemented)
 			return
 		}
-		http.Error(w, "install failed: "+out, http.StatusInternalServerError)
+		http.Error(w, "install failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -216,6 +224,10 @@ func (m *Module) handleGetIni(w http.ResponseWriter, r *http.Request) {
 func (m *Module) handlePutIni(w http.ResponseWriter, r *http.Request) {
 	uid, ok := m.requireAdmin(w, r)
 	if !ok {
+		return
+	}
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
 		return
 	}
 	version, ok := versionParam(w, r)
@@ -277,6 +289,10 @@ func (m *Module) handleToggleExtension(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
 	version, ok := versionParam(w, r)
 	if !ok {
 		return
@@ -322,6 +338,10 @@ func (m *Module) toggleExtension(set Settings, version, ext string, enable bool)
 func (m *Module) handleFpmAction(w http.ResponseWriter, r *http.Request) {
 	uid, ok := m.requireAdmin(w, r)
 	if !ok {
+		return
+	}
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
 		return
 	}
 	version, ok := versionParam(w, r)
