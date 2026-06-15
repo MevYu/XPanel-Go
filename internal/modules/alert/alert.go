@@ -270,6 +270,10 @@ func (m *Module) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid channel: name and known kind required", http.StatusBadRequest)
 		return
 	}
+	if err := validateChannel(c); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	id, err := m.ss.createChannel(c)
 	if err != nil {
 		log.Printf("alert: create channel failed: %v", err)
@@ -298,6 +302,10 @@ func (m *Module) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	c.ID = id
 	if !validChannelKind(c.Kind) || c.Name == "" {
 		http.Error(w, "invalid channel: name and known kind required", http.StatusBadRequest)
+		return
+	}
+	if err := validateChannel(c); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := m.ss.updateChannel(c); err != nil {
