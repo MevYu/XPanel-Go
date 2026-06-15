@@ -33,13 +33,20 @@ func main() {
 	}
 	defer st.Close()
 
-	secret, _ := base64.StdEncoding.DecodeString(cfg.JWTSecret)
+	secret, err := cfg.DecodedSecret()
+	if err != nil {
+		log.Fatalf("jwt secret: %v", err)
+	}
 	jm := auth.NewJWTManager(secret)
 	lo := auth.NewLockout(5, 5*time.Minute, time.Now)
 	svc := auth.NewService(st, jm, lo)
 
 	// 首启:无用户则创建 admin,随机密码打印到 stdout(仅此一次)
-	if n, _ := st.CountUsers(); n == 0 {
+	n, err := st.CountUsers()
+	if err != nil {
+		log.Fatalf("count users: %v", err)
+	}
+	if n == 0 {
 		pw := randomPassword()
 		if err := svc.Register("admin", pw, "admin"); err != nil {
 			log.Fatalf("bootstrap admin: %v", err)
@@ -48,14 +55,14 @@ func main() {
 	}
 
 	h := server.New(svc, jm)
-	fmt.Printf("XPanel %s 监听 https-ready http://%s\n", version, cfg.Addr)
+	fmt.Printf("XPanel %s 监听 http://%s\n", version, cfg.Addr)
 	log.Fatal(http.ListenAndServe(cfg.Addr, h))
 }
 
 func randomPassword() string {
 	b := make([]byte, 12)
-	_, _ = randRead(b)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("generate password: %v", err)
+	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
-
-func randRead(b []byte) (int, error) { return rand.Read(b) }

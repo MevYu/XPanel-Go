@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 )
 
@@ -27,7 +28,22 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, err
 	}
+	if _, err := c.DecodedSecret(); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+// DecodedSecret 解码 JWT 密钥并校验长度,确保签名密钥有效(防被改坏的 config 导致弱/空密钥)。
+func (c Config) DecodedSecret() ([]byte, error) {
+	b, err := base64.StdEncoding.DecodeString(c.JWTSecret)
+	if err != nil {
+		return nil, fmt.Errorf("decode jwt_secret: %w", err)
+	}
+	if len(b) < 32 {
+		return nil, errors.New("jwt_secret too short (need >= 32 bytes)")
+	}
+	return b, nil
 }
 
 func generate(path string) (Config, error) {
