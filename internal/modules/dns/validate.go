@@ -11,12 +11,12 @@ import (
 // 目的是挡注入(进 zone 文件 / provider API / exec)与畸形数据。绝不放行可疑字符。
 
 var (
-	errBadDomain  = errors.New("invalid domain name")
-	errBadType    = errors.New("invalid record type")
-	errBadName    = errors.New("invalid record name")
-	errBadValue   = errors.New("invalid record value")
-	errBadTTL     = errors.New("ttl out of range (60..604800)")
-	errBadPrio    = errors.New("priority out of range (0..65535)")
+	errBadDomain = errors.New("invalid domain name")
+	errBadType   = errors.New("invalid record type")
+	errBadName   = errors.New("invalid record name")
+	errBadValue  = errors.New("invalid record value")
+	errBadTTL    = errors.New("ttl out of range (60..604800)")
+	errBadPrio   = errors.New("priority out of range (0..65535)")
 )
 
 // supportedTypes 是允许管理的记录类型白名单。

@@ -64,14 +64,14 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/settings", m.handleGetSettings) // 只读(admin)
 	r.Put("/settings", m.handlePutSettings) // 写(admin)
 
-	r.Get("/domains", m.handleListDomains)            // 只读(任意已认证)
-	r.Post("/domains", m.handleCreateDomain)          // 写(admin)
-	r.Delete("/domains/{id}", m.handleDeleteDomain)   // 危险(admin + 确认)
+	r.Get("/domains", m.handleListDomains)          // 只读(任意已认证)
+	r.Post("/domains", m.handleCreateDomain)        // 写(admin)
+	r.Delete("/domains/{id}", m.handleDeleteDomain) // 危险(admin + 确认)
 
-	r.Get("/domains/{id}/records", m.handleListRecords)              // 只读(任意已认证)
-	r.Post("/domains/{id}/records", m.handleCreateRecord)            // 写(admin)
-	r.Put("/domains/{id}/records/{rid}", m.handleUpdateRecord)       // 写(admin)
-	r.Delete("/domains/{id}/records/{rid}", m.handleDeleteRecord)    // 危险(admin + 确认)
+	r.Get("/domains/{id}/records", m.handleListRecords)           // 只读(任意已认证)
+	r.Post("/domains/{id}/records", m.handleCreateRecord)         // 写(admin)
+	r.Put("/domains/{id}/records/{rid}", m.handleUpdateRecord)    // 写(admin)
+	r.Delete("/domains/{id}/records/{rid}", m.handleDeleteRecord) // 危险(admin + 确认)
 }
 
 // recordInput 是增/改记录的请求体。

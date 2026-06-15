@@ -21,7 +21,7 @@ type Notification struct {
 }
 
 // Sender 把通知投递到一个具体渠道。secret 是该渠道解密后的明文凭证
-//(SMTP 密码 / webhook bearer token / telegram bot token)。
+// (SMTP 密码 / webhook bearer token / telegram bot token)。
 // 抽象成接口便于 mock 测试,不在测试里真发网络请求。
 type Sender interface {
 	Send(ctx context.Context, ch Channel, secret string, n Notification) error

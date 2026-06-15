@@ -65,7 +65,7 @@ func (*Module) Stop(context.Context) error  { return nil }
 func (m *Module) HealthCheck() error { return m.compose.Available() }
 
 func (m *Module) Routes(r module.Router) {
-	r.Get("/apps", m.handleCatalog)                              // 只读:内置应用目录
+	r.Get("/apps", m.handleCatalog)                             // 只读:内置应用目录
 	r.Get("/instances", m.handleList)                           // 只读:已安装实例
 	r.Get("/instances/{id}", m.handleGet)                       // 只读
 	r.Get("/instances/{id}/status", m.handleStatus)             // 只读:compose ps

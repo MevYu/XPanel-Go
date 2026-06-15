@@ -47,15 +47,15 @@ func TestValidPassword(t *testing.T) {
 		t.Error("good password rejected")
 	}
 	bad := []string{
-		"short",                 // 太短
-		"has space12",           // 空格
-		"has\nnewline1",         // 换行
-		"quote'inj12",           // 单引号(YAML 注入字符)
-		"dollar$ign12",          // $
-		"colon:inj123",          // : (YAML 键分隔)
-		"back`tick123",          // 反引号
-		`double"quote1`,         // 双引号
-		strings.Repeat("a", 200),// 太长
+		"short",                  // 太短
+		"has space12",            // 空格
+		"has\nnewline1",          // 换行
+		"quote'inj12",            // 单引号(YAML 注入字符)
+		"dollar$ign12",           // $
+		"colon:inj123",           // : (YAML 键分隔)
+		"back`tick123",           // 反引号
+		`double"quote1`,          // 双引号
+		strings.Repeat("a", 200), // 太长
 	}
 	for _, p := range bad {
 		if validPassword(p) {

@@ -11,11 +11,11 @@ import (
 type Metric string
 
 const (
-	MetricCPU     Metric = "cpu"      // CPU 使用率 %
-	MetricMemory  Metric = "memory"   // 内存使用率 %
-	MetricDisk    Metric = "disk"     // 根分区磁盘使用率 %
-	MetricLoad    Metric = "load"     // 1 分钟系统负载
-	MetricDiskIO  Metric = "disk_io"  // 所有设备读写字节速率之和(bytes/s,需相邻两次采样差分)
+	MetricCPU    Metric = "cpu"     // CPU 使用率 %
+	MetricMemory Metric = "memory"  // 内存使用率 %
+	MetricDisk   Metric = "disk"    // 根分区磁盘使用率 %
+	MetricLoad   Metric = "load"    // 1 分钟系统负载
+	MetricDiskIO Metric = "disk_io" // 所有设备读写字节速率之和(bytes/s,需相邻两次采样差分)
 )
 
 // validMetric 报告 m 是否为已知指标。

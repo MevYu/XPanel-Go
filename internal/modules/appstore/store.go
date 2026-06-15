@@ -15,12 +15,12 @@ type appStore struct{ db *sql.DB }
 // Instance 是一条已安装应用实例的记录。
 type Instance struct {
 	ID         int64             `json:"id"`
-	AppID      string            `json:"app_id"`     // 对应内置目录 App.ID
-	Name       string            `json:"name"`       // 实例名(compose 项目名),全局唯一
-	Params     map[string]string `json:"params"`     // 安装参数(密码字段在返回时由 handler 决定是否脱敏)
-	Compose    string            `json:"compose"`    // 渲染后的 compose 文本
-	ProjectDir string            `json:"project_dir"`// compose 项目目录绝对路径
-	Status     string            `json:"status"`     // running / stopped
+	AppID      string            `json:"app_id"`      // 对应内置目录 App.ID
+	Name       string            `json:"name"`        // 实例名(compose 项目名),全局唯一
+	Params     map[string]string `json:"params"`      // 安装参数(密码字段在返回时由 handler 决定是否脱敏)
+	Compose    string            `json:"compose"`     // 渲染后的 compose 文本
+	ProjectDir string            `json:"project_dir"` // compose 项目目录绝对路径
+	Status     string            `json:"status"`      // running / stopped
 	CreatedBy  *int64            `json:"created_by"`
 	CreatedAt  int64             `json:"created_at"`
 	UpdatedAt  int64             `json:"updated_at"`

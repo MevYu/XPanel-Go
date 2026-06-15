@@ -52,9 +52,9 @@ func (rn *mockRunner) Action(verb, name string) (string, error) {
 	rn.actions = append(rn.actions, verb+" "+name)
 	return "ok", nil
 }
-func (rn *mockRunner) Status(name string) (string, error)        { return "RUNNING " + name, nil }
-func (rn *mockRunner) Logs(name string, _ int) (string, error)   { return "log " + name, nil }
-func (rn *mockRunner) Available() error                          { return rn.avail }
+func (rn *mockRunner) Status(name string) (string, error)      { return "RUNNING " + name, nil }
+func (rn *mockRunner) Logs(name string, _ int) (string, error) { return "log " + name, nil }
+func (rn *mockRunner) Available() error                        { return rn.avail }
 
 func newTestModule(t *testing.T, role string, prov Provisioner, rn Runner) (*Module, *int) {
 	t.Helper()

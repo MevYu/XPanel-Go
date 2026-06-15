@@ -91,15 +91,15 @@ func (*Module) Stop(context.Context) error  { return nil }
 func (m *Module) HealthCheck() error { return m.pm.Available() }
 
 func (m *Module) Routes(r module.Router) {
-	r.Get("/projects", m.handleList)                                  // 只读
-	r.Post("/projects", m.handleCreate)                               // 写:operator+
-	r.Delete("/projects/{id}", m.handleDelete)                        // 危险写:admin + 确认
-	r.Get("/projects/{id}/status", m.handleStatus)                    // 只读
-	r.Get("/projects/{id}/logs", m.handleLogs)                        // 只读
+	r.Get("/projects", m.handleList)                                   // 只读
+	r.Post("/projects", m.handleCreate)                                // 写:operator+
+	r.Delete("/projects/{id}", m.handleDelete)                         // 危险写:admin + 确认
+	r.Get("/projects/{id}/status", m.handleStatus)                     // 只读
+	r.Get("/projects/{id}/logs", m.handleLogs)                         // 只读
 	r.Post("/projects/{id}/{verb:start|stop|restart}", m.handleAction) // 写:operator+(stop 危险)
-	r.Get("/versions", m.handleVersions)                              // 只读:已装 Node 版本
-	r.Get("/settings", m.handleGetSettings)                           // 只读
-	r.Put("/settings", m.handlePutSettings)                           // 写:admin
+	r.Get("/versions", m.handleVersions)                               // 只读:已装 Node 版本
+	r.Get("/settings", m.handleGetSettings)                            // 只读
+	r.Put("/settings", m.handlePutSettings)                            // 写:admin
 }
 
 type projectRequest struct {

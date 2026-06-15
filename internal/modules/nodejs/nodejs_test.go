@@ -32,10 +32,10 @@ func (m *mockPM) Action(verb, name string) (string, error) {
 	m.actions = append(m.actions, verb+" "+name)
 	return "ok", nil
 }
-func (m *mockPM) Status(name string) (string, error)               { return "RUNNING " + name, nil }
+func (m *mockPM) Status(name string) (string, error)                 { return "RUNNING " + name, nil }
 func (m *mockPM) TailLog(name string, _ int, _ bool) (string, error) { return "log " + name, nil }
-func (m *mockPM) NodeVersions() []string                           { return m.versions }
-func (m *mockPM) Available() error                                 { return m.avail }
+func (m *mockPM) NodeVersions() []string                             { return m.versions }
+func (m *mockPM) Available() error                                   { return m.avail }
 
 func newTestModule(t *testing.T, role string, pm ProcessManager) (*Module, *int) {
 	t.Helper()

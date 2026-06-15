@@ -65,10 +65,10 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/settings", m.handleGetSettings) // 只读(admin)
 	r.Put("/settings", m.handlePutSettings) // 写(admin)
 
-	r.Get("/accounts", m.handleList)                       // 列出(admin)
-	r.Post("/accounts", m.handleCreate)                    // 创建(admin)
-	r.Delete("/accounts/{user}", m.handleDelete)           // 删除(admin + 危险确认)
-	r.Post("/accounts/{user}/password", m.handlePassword)  // 改密(admin)
+	r.Get("/accounts", m.handleList)                                 // 列出(admin)
+	r.Post("/accounts", m.handleCreate)                              // 创建(admin)
+	r.Delete("/accounts/{user}", m.handleDelete)                     // 删除(admin + 危险确认)
+	r.Post("/accounts/{user}/password", m.handlePassword)            // 改密(admin)
 	r.Post("/accounts/{user}/{verb:enable|disable}", m.handleToggle) // 启停(admin)
 }
 

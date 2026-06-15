@@ -67,7 +67,7 @@ func (m *mockCompose) Start(project, _ string) error {
 	return nil
 }
 
-func (m *mockCompose) PS(_, _ string) (string, error)        { return m.psOut, nil }
+func (m *mockCompose) PS(_, _ string) (string, error)          { return m.psOut, nil }
 func (m *mockCompose) Logs(_, _ string, _ int) (string, error) { return m.logsOut, nil }
 
 func (m *mockCompose) RemoveProjectDir(projectDir string) error {

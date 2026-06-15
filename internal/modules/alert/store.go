@@ -59,16 +59,16 @@ type Channel struct {
 
 // Rule 是一条告警规则。
 type Rule struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Metric      string `json:"metric"`
-	Comparator  string `json:"comparator"`
+	ID          int64   `json:"id"`
+	Name        string  `json:"name"`
+	Metric      string  `json:"metric"`
+	Comparator  string  `json:"comparator"`
 	Threshold   float64 `json:"threshold"`
-	DurationSec int    `json:"duration_sec"` // 持续超阈值多久才触发
-	ChannelID   int64  `json:"channel_id"`
-	Enabled     bool   `json:"enabled"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	DurationSec int     `json:"duration_sec"` // 持续超阈值多久才触发
+	ChannelID   int64   `json:"channel_id"`
+	Enabled     bool    `json:"enabled"`
+	CreatedAt   int64   `json:"created_at"`
+	UpdatedAt   int64   `json:"updated_at"`
 }
 
 // History 是一条告警触发历史。

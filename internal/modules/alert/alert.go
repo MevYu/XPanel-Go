@@ -30,7 +30,7 @@ type Module struct {
 	ss   *alertStore
 	deps Deps
 
-	mu     sync.Mutex      // 守护 cancel/wg(Start/Stop 可被 Manager 串行调用)
+	mu     sync.Mutex // 守护 cancel/wg(Start/Stop 可被 Manager 串行调用)
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -109,15 +109,15 @@ func (m *Module) runLoop(ctx context.Context) {
 }
 
 func (m *Module) Routes(r module.Router) {
-	r.Get("/rules", m.handleListRules)             // 只读
-	r.Post("/rules", m.handleCreateRule)           // 写:operator+
-	r.Put("/rules/{id}", m.handleUpdateRule)       // 写:operator+
-	r.Delete("/rules/{id}", m.handleDeleteRule)    // 写:operator+
+	r.Get("/rules", m.handleListRules)          // 只读
+	r.Post("/rules", m.handleCreateRule)        // 写:operator+
+	r.Put("/rules/{id}", m.handleUpdateRule)    // 写:operator+
+	r.Delete("/rules/{id}", m.handleDeleteRule) // 写:operator+
 
-	r.Get("/channels", m.handleListChannels)       // 只读(凭证已屏蔽)
-	r.Post("/channels", m.handleCreateChannel)     // 写:admin(凭证)
-	r.Put("/channels/{id}", m.handleUpdateChannel) // 写:admin(凭证)
-	r.Delete("/channels/{id}", m.handleDeleteChannel) // 写:admin
+	r.Get("/channels", m.handleListChannels)           // 只读(凭证已屏蔽)
+	r.Post("/channels", m.handleCreateChannel)         // 写:admin(凭证)
+	r.Put("/channels/{id}", m.handleUpdateChannel)     // 写:admin(凭证)
+	r.Delete("/channels/{id}", m.handleDeleteChannel)  // 写:admin
 	r.Post("/channels/{id}/test", m.handleTestChannel) // 测试发送:admin
 
 	r.Get("/history", m.handleListHistory) // 只读

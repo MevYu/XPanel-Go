@@ -9,7 +9,7 @@ import (
 
 // 默认可配置路径。GET/PUT /settings(admin)可覆盖。
 const (
-	defaultProjectRoot = "/www/python"           // 项目代码基目录
+	defaultProjectRoot = "/www/python"            // 项目代码基目录
 	defaultVenvRoot    = "/www/python/venv"       // venv 基目录
 	defaultInterpreter = "python3"                // 默认解释器版本标识
 	defaultConfDir     = "/etc/supervisor/conf.d" // 进程配置目录
