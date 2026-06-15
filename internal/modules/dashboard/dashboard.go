@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
@@ -44,6 +45,34 @@ func (*Module) Routes(r module.Router) {
 		_ = json.NewEncoder(w).Encode(snap)
 	})
 	r.Get("/stream", streamHandler)
+
+	r.Get("/metrics/detail", func(w http.ResponseWriter, _ *http.Request) {
+		d, err := system.DetailSnapshot()
+		if err != nil {
+			http.Error(w, "detail metrics unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, d)
+	})
+	r.Get("/processes", func(w http.ResponseWriter, req *http.Request) {
+		limit := 20
+		if v := req.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		procs, err := system.TopProcesses(limit)
+		if err != nil {
+			http.Error(w, "processes unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, procs)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // streamHandler 每 2s 推一次指标快照,直到客户端断开。

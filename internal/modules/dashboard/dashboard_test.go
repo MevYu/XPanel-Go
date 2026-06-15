@@ -28,6 +28,36 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 }
 
+func TestDetailMetricsEndpoint(t *testing.T) {
+	r := chi.NewRouter()
+	New().Routes(r)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics/detail", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, key := range []string{"cpu_per_core", "network", "disk_io", "uptime_sec", "swap_total"} {
+		if !contains(body, key) {
+			t.Errorf("detail body missing %q: %s", key, body)
+		}
+	}
+}
+
+func TestProcessesEndpoint(t *testing.T) {
+	r := chi.NewRouter()
+	New().Routes(r)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/processes?limit=3", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("processes status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !contains(body, "pid") || !contains(body, "cpu_percent") {
+		t.Errorf("processes body missing keys: %s", body)
+	}
+}
+
 func contains(s, sub string) bool { return len(s) >= len(sub) && (indexOf(s, sub) >= 0) }
 func indexOf(s, sub string) int {
 	for i := 0; i+len(sub) <= len(s); i++ {
