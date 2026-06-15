@@ -16,17 +16,29 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/auth"
 	"github.com/MevYu/XPanel-Go/internal/config"
 	"github.com/MevYu/XPanel-Go/internal/module"
+	"github.com/MevYu/XPanel-Go/internal/modules/alert"
+	"github.com/MevYu/XPanel-Go/internal/modules/antitamper"
+	"github.com/MevYu/XPanel-Go/internal/modules/appstore"
+	"github.com/MevYu/XPanel-Go/internal/modules/backup"
 	"github.com/MevYu/XPanel-Go/internal/modules/cron"
 	"github.com/MevYu/XPanel-Go/internal/modules/dashboard"
 	"github.com/MevYu/XPanel-Go/internal/modules/database"
+	"github.com/MevYu/XPanel-Go/internal/modules/dns"
+	"github.com/MevYu/XPanel-Go/internal/modules/docker"
 	"github.com/MevYu/XPanel-Go/internal/modules/files"
 	"github.com/MevYu/XPanel-Go/internal/modules/firewall"
+	"github.com/MevYu/XPanel-Go/internal/modules/ftp"
 	"github.com/MevYu/XPanel-Go/internal/modules/malscan"
+	"github.com/MevYu/XPanel-Go/internal/modules/nodejs"
+	"github.com/MevYu/XPanel-Go/internal/modules/php"
+	"github.com/MevYu/XPanel-Go/internal/modules/python"
+	"github.com/MevYu/XPanel-Go/internal/modules/security"
 	"github.com/MevYu/XPanel-Go/internal/modules/service"
 	"github.com/MevYu/XPanel-Go/internal/modules/sites"
 	"github.com/MevYu/XPanel-Go/internal/modules/ssl"
 	"github.com/MevYu/XPanel-Go/internal/modules/supervisor"
 	"github.com/MevYu/XPanel-Go/internal/modules/terminal"
+	"github.com/MevYu/XPanel-Go/internal/modules/users"
 	"github.com/MevYu/XPanel-Go/internal/modules/waf"
 	"github.com/MevYu/XPanel-Go/internal/server"
 	"github.com/MevYu/XPanel-Go/internal/store"
@@ -122,6 +134,56 @@ func main() {
 		Audit:     auditFn,
 	}))
 	reg.Register(malscan.New(st, malscan.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(docker.New(st, docker.NewRunner(), docker.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(users.New(st, cfg.JWTSecret, users.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(ftp.New(st, nil, ftp.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(backup.New(cfg.JWTSecret, st, backup.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(php.New(st, nil, nil, php.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(nodejs.New(st, nodejs.NewSupervisorManager(), nodejs.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(python.New(st, python.NewProvisioner(), func(s python.Settings) python.Runner {
+		return python.NewSupervisorRunner(s.ConfDir, s.LogDir)
+	}, python.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(dns.New(cfg.JWTSecret, st, dns.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(security.New(st, nil, nil, nil, security.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(antitamper.New(st, antitamper.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(appstore.New(st, appstore.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(alert.New(cfg.JWTSecret, st, alert.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
 	}))
