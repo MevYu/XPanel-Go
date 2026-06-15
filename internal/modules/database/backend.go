@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq" // postgres 驱动:sql.Open("postgres", ...) 需此 blank import 注册
 )
 
 // sqlBackend 抽象一个 SQL 实例的连接/查询/执行,便于用 mock 测业务(测试环境无真实实例)。
