@@ -117,3 +117,12 @@ type principal struct {
 	userID int64
 	role   string
 }
+
+// PrincipalFromRequest 取出 RequireAuth 放进 context 的登录主体。未认证返回 (0, "")。
+func PrincipalFromRequest(r *http.Request) (int64, string) {
+	p, ok := r.Context().Value(claimsKey).(principal)
+	if !ok {
+		return 0, ""
+	}
+	return p.userID, p.role
+}

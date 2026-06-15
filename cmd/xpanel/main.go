@@ -12,6 +12,9 @@ import (
 
 	"github.com/MevYu/XPanel-Go/internal/auth"
 	"github.com/MevYu/XPanel-Go/internal/config"
+	"github.com/MevYu/XPanel-Go/internal/module"
+	"github.com/MevYu/XPanel-Go/internal/modules/dashboard"
+	"github.com/MevYu/XPanel-Go/internal/modules/service"
 	"github.com/MevYu/XPanel-Go/internal/server"
 	"github.com/MevYu/XPanel-Go/internal/store"
 )
@@ -55,7 +58,19 @@ func main() {
 		fmt.Printf("==== XPanel 首次启动 ====\n用户名: admin\n密码: %s\n(请立即登录并修改)\n", pw)
 	}
 
-	h := server.New(svc, jm)
+	reg := module.NewRegistry()
+	reg.Register(dashboard.New())
+	reg.Register(service.New(service.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit: func(userID *int64, action, detail, ip string) {
+			_ = st.WriteAudit(userID, action, detail, ip)
+		},
+	}))
+	mgr := module.NewManager(reg, st)
+	if err := mgr.Restore(); err != nil {
+		log.Fatalf("module restore: %v", err)
+	}
+	h := server.NewWithModules(svc, jm, reg, mgr)
 	fmt.Printf("XPanel %s 监听 http://%s\n", version, cfg.Addr)
 	log.Fatal(http.ListenAndServe(cfg.Addr, h))
 }
