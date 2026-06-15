@@ -57,10 +57,10 @@ func (*Module) Stop(context.Context) error { return nil }
 func (*Module) HealthCheck() error { return system.CrontabAvailable() }
 
 func (m *Module) Routes(r module.Router) {
-	r.Get("/jobs", m.handleList)               // 只读
-	r.Post("/jobs", m.handleCreate)            // 写
-	r.Put("/jobs/{id}", m.handleUpdate)        // 写
-	r.Delete("/jobs/{id}", m.handleDelete)     // 写
+	r.Get("/jobs", m.handleList)                               // 只读
+	r.Post("/jobs", m.handleCreate)                            // 写
+	r.Put("/jobs/{id}", m.handleUpdate)                        // 写
+	r.Delete("/jobs/{id}", m.handleDelete)                     // 写
 	r.Post("/jobs/{id}/{verb:enable|disable}", m.handleToggle) // 写
 }
 

@@ -21,8 +21,8 @@ func TestValidCronExpr(t *testing.T) {
 	}
 	invalid := []string{
 		"",
-		"* * * *",            // 只有 4 段
-		"* * * * * *",        // 6 段
+		"* * * *",             // 只有 4 段
+		"* * * * * *",         // 6 段
 		"0 3 * * *; rm -rf /", // 注入
 		"0 3 * *\n* echo",     // 换行
 		"0 3 * * $(whoami)",   // 命令替换
