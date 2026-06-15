@@ -11,6 +11,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -371,6 +373,14 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provider_kind must be bind or mock", http.StatusBadRequest)
 		return
 	}
+	// zone 文件直接写进 BindZoneDir,未校验则 admin 可把文件写到任意目录。
+	// 要求绝对、Clean 后稳定(无 "..")、且为已存在目录。
+	if in.BindZoneDir != "" {
+		if err := validBindZoneDir(in.BindZoneDir); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if err := m.st.saveSettings(in); err != nil {
 		log.Printf("dns: settings save failed: %v", err)
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
@@ -386,6 +396,22 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- helpers ---
+
+// validBindZoneDir 校验 zone 目录:必须绝对、Clean 后稳定(无 ".."、无冗余分隔符)、
+// 且为已存在的目录。zone 文件直接写入此目录,故拒绝任意/相对/穿越路径。
+func validBindZoneDir(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return errors.New("bind_zone_dir must be an absolute path")
+	}
+	if filepath.Clean(dir) != dir {
+		return errors.New("bind_zone_dir must be a clean path (no .. or redundant separators)")
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return errors.New("bind_zone_dir must be an existing directory")
+	}
+	return nil
+}
 
 func (m *Module) authed(w http.ResponseWriter, r *http.Request) bool {
 	if _, role := m.deps.Principal(r); role == "" {

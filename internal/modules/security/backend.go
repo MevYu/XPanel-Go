@@ -375,7 +375,7 @@ func (execFail2ban) Available() error {
 func (execFail2ban) Status(jail string) (string, error) {
 	args := []string{"status"}
 	if jail != "" {
-		args = append(args, jail)
+		args = append(args, "--", jail)
 	}
 	out, err := exec.Command("fail2ban-client", args...).CombinedOutput()
 	if err != nil {
@@ -385,7 +385,7 @@ func (execFail2ban) Status(jail string) (string, error) {
 }
 
 func (execFail2ban) Banned(jail string) ([]string, error) {
-	out, err := exec.Command("fail2ban-client", "status", jail).CombinedOutput()
+	out, err := exec.Command("fail2ban-client", "status", "--", jail).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("fail2ban status %s: %w: %s", jail, err, strings.TrimSpace(string(out)))
 	}
@@ -393,7 +393,7 @@ func (execFail2ban) Banned(jail string) ([]string, error) {
 }
 
 func (execFail2ban) Unban(jail, ip string) error {
-	out, err := exec.Command("fail2ban-client", "set", jail, "unbanip", ip).CombinedOutput()
+	out, err := exec.Command("fail2ban-client", "set", "--", jail, "unbanip", ip).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("fail2ban unban: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -405,7 +405,7 @@ func (execFail2ban) SetJail(jail string, enable bool) error {
 	if enable {
 		verb = "start"
 	}
-	out, err := exec.Command("fail2ban-client", verb, jail).CombinedOutput()
+	out, err := exec.Command("fail2ban-client", verb, "--", jail).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("fail2ban %s %s: %w: %s", verb, jail, err, strings.TrimSpace(string(out)))
 	}

@@ -207,6 +207,31 @@ func TestSettingsCredsNeverLeak(t *testing.T) {
 	}
 }
 
+// BindZoneDir 未校验则 admin 可把 zone 文件写到任意目录:拒绝相对/穿越/不存在路径,
+// 仅接受绝对、Clean 稳定、已存在的目录。
+func TestPutSettingsRejectsUnsafeBindZoneDir(t *testing.T) {
+	audited := 0
+	_, r := newTestModule(t, "admin", &audited)
+	bad := []string{
+		"relative/dir",
+		"/etc/bind/../../tmp",
+		"/etc/bind/zones/",          // 尾随分隔符 → Clean 不稳定
+		"/nonexistent/xpanel/zones", // 不存在
+	}
+	for _, dir := range bad {
+		rec := do(r, "PUT", "/settings", Settings{ProviderKind: "bind", BindZoneDir: dir}, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("BindZoneDir=%q should 400, got %d (%s)", dir, rec.Code, rec.Body)
+		}
+	}
+	// 已存在的绝对目录可通过。
+	good := t.TempDir()
+	rec := do(r, "PUT", "/settings", Settings{ProviderKind: "bind", BindZoneDir: good}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid BindZoneDir=%q should 200, got %d (%s)", good, rec.Code, rec.Body)
+	}
+}
+
 func TestSettingsRequiresAdmin(t *testing.T) {
 	audited := 0
 	_, r := newTestModule(t, "operator", &audited)

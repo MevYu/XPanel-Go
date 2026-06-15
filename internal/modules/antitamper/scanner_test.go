@@ -1,6 +1,7 @@
 package antitamper
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +22,7 @@ func TestScanTreeFingerprints(t *testing.T) {
 	writeFile(t, filepath.Join(root, "a.txt"), "hello")
 	writeFile(t, filepath.Join(root, "sub", "b.txt"), "world")
 
-	states, err := ScanTree(root, nil)
+	states, err := ScanTree(context.Background(), root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +41,7 @@ func TestScanTreeExcludes(t *testing.T) {
 	writeFile(t, filepath.Join(root, "cache", "junk.log"), "y")
 	writeFile(t, filepath.Join(root, "z.log"), "z")
 
-	states, err := ScanTree(root, []string{"cache", "*.log"})
+	states, err := ScanTree(context.Background(), root, []string{"cache", "*.log"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestScanTreeSkipsSymlinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "real.txt"), link); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	states, err := ScanTree(root, nil)
+	states, err := ScanTree(context.Background(), root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestDiffDetectsAllChangeTypes(t *testing.T) {
 	writeFile(t, filepath.Join(root, "mod.txt"), "before")
 	writeFile(t, filepath.Join(root, "del.txt"), "gone soon")
 
-	base, err := ScanTree(root, nil)
+	base, err := ScanTree(context.Background(), root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func TestDiffDetectsAllChangeTypes(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(root, "new.txt"), "fresh")
 
-	cur, err := ScanTree(root, nil)
+	cur, err := ScanTree(context.Background(), root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,9 +114,38 @@ func TestDiffDetectsAllChangeTypes(t *testing.T) {
 func TestDiffNoChanges(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "a.txt"), "x")
-	base, _ := ScanTree(root, nil)
-	cur, _ := ScanTree(root, nil)
+	base, _ := ScanTree(context.Background(), root, nil)
+	cur, _ := ScanTree(context.Background(), root, nil)
 	if c := Diff(base, cur); len(c) != 0 {
 		t.Fatalf("stable tree must yield no changes, got %+v", c)
 	}
+}
+
+// ctx 已取消时,ScanTree 在文件间立即 bail,不扫完整棵树。
+// 这是 Stop()(cancel+<-done)能快速返回的前提:慢扫描不会冻结持锁的 Manager。
+func TestScanTreeBailsOnCanceledCtx(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 200; i++ {
+		writeFile(t, filepath.Join(root, "f"+itoa(i)+".txt"), "data")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ScanTree(ctx, root, nil)
+	if err != context.Canceled {
+		t.Fatalf("ScanTree on canceled ctx = %v, want context.Canceled", err)
+	}
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [20]byte
+	p := len(b)
+	for i > 0 {
+		p--
+		b[p] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[p:])
 }

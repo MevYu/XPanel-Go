@@ -18,7 +18,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 
 	"github.com/MevYu/XPanel-Go/internal/module"
 	"github.com/MevYu/XPanel-Go/internal/store"
+	"github.com/MevYu/XPanel-Go/internal/system"
 )
 
 // Deps 注入宿主能力,避免反向依赖 server。与其它模块一致。
@@ -362,23 +362,16 @@ func defaultInstanceName(appID string) string {
 }
 
 // safeProjectDir 把实例名拼到 compose 项目基目录下,拒绝穿越到基目录之外。
+// 用 system.SafeJoin 做拼接 + 符号链接逃逸防护(自制 prefix 检查跟随软链)。
 func safeProjectDir(base, name string) (string, error) {
 	if !validInstanceName(name) {
 		return "", fmt.Errorf("invalid instance name %q", name)
 	}
-	base = filepath.Clean(base)
-	joined := filepath.Clean(filepath.Join(base, name))
-	if joined != base && !hasPathPrefix(joined, base) {
-		return "", fmt.Errorf("resolved project dir escapes base directory")
+	joined, err := system.SafeJoin(base, name)
+	if err != nil {
+		return "", fmt.Errorf("resolved project dir escapes base directory: %w", err)
 	}
 	return joined, nil
-}
-
-func hasPathPrefix(p, base string) bool {
-	if p == base {
-		return true
-	}
-	return len(p) > len(base) && p[:len(base)] == base && p[len(base)] == filepath.Separator
 }
 
 func confirmed(r *http.Request) bool { return r.Header.Get("X-Confirm-Danger") != "" }

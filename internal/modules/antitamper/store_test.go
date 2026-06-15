@@ -1,6 +1,7 @@
 package antitamper
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestBaselineReplaceAndRead(t *testing.T) {
 	as := newTestStore(t)
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "a.txt"), "x")
-	states, _ := ScanTree(root, nil)
+	states, _ := ScanTree(context.Background(), root, nil)
 	if err := as.replaceBaseline(states); err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +92,12 @@ func TestApplyChangesUpdatesBaseline(t *testing.T) {
 	as := newTestStore(t)
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "mod.txt"), "before")
-	base, _ := ScanTree(root, nil)
+	base, _ := ScanTree(context.Background(), root, nil)
 	as.replaceBaseline(base)
 
 	writeFile(t, filepath.Join(root, "mod.txt"), "after")
 	writeFile(t, filepath.Join(root, "new.txt"), "added")
-	cur, _ := ScanTree(root, nil)
+	cur, _ := ScanTree(context.Background(), root, nil)
 	changes := Diff(base, cur)
 
 	if err := as.applyChanges(cur, changes); err != nil {

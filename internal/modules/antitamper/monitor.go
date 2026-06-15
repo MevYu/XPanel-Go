@@ -58,7 +58,7 @@ func (m *monitor) run(ctx context.Context, done chan<- struct{}) {
 			timer.Stop()
 			return
 		case <-timer.C:
-			if err := m.scanOnce(); err != nil {
+			if err := m.scanOnce(ctx); err != nil {
 				log.Printf("antitamper: scan failed: %v", err)
 			}
 		}
@@ -76,7 +76,7 @@ func (m *monitor) interval() time.Duration {
 
 // scanOnce 执行一轮:对每个受保护目录扫描当前指纹,与基线对比,
 // 记事件、触发告警、增量更新基线。暂停时跳过(只读监控,绝不执行被监控文件)。
-func (m *monitor) scanOnce() error {
+func (m *monitor) scanOnce(ctx context.Context) error {
 	s, err := m.st.getSettings()
 	if err != nil {
 		return err
@@ -94,7 +94,10 @@ func (m *monitor) scanOnce() error {
 	}
 	cur := map[string]FileState{}
 	for _, dir := range s.ProtectedDirs {
-		states, serr := ScanTree(dir, s.ExcludeRules)
+		if err := ctx.Err(); err != nil {
+			return err // Stop() 取消时及时退出,不被慢扫描拖住
+		}
+		states, serr := ScanTree(ctx, dir, s.ExcludeRules)
 		if serr != nil {
 			log.Printf("antitamper: scan dir %q: %v", dir, serr)
 			continue

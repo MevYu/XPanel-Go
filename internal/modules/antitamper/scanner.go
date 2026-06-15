@@ -1,6 +1,7 @@
 package antitamper
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -38,17 +39,31 @@ type Change struct {
 }
 
 // hashFile 计算文件内容的 SHA-256。只读打开,绝不执行被监控文件。
-func hashFile(path string) (string, error) {
+// ctx 取消时尽快中止(大文件 io.Copy 期间也能 bail)。
+func hashFile(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, &ctxReader{ctx: ctx, r: f}); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ctxReader 在每次 Read 前检查 ctx,使大文件哈希也能被取消打断。
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (cr *ctxReader) Read(p []byte) (int, error) {
+	if err := cr.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return cr.r.Read(p)
 }
 
 // excluded 报告 rel(相对受保护根的路径,以 "/" 分隔)是否命中任一排除规则。
@@ -75,11 +90,15 @@ func excluded(rel string, rules []string) bool {
 // ScanTree 遍历 root 子树,为每个常规文件生成 FileState。
 // 跳过目录、符号链接与命中 exclude 规则的路径(只读;绝不执行被监控文件)。
 // 返回的 map 以绝对路径为键。root 必须是已存在的绝对路径。
-func ScanTree(root string, exclude []string) (map[string]FileState, error) {
+// ctx 取消时在文件间及时中止,使持锁调 Stop 的调用方不被慢扫描阻塞。
+func ScanTree(ctx context.Context, root string, exclude []string) (map[string]FileState, error) {
 	out := map[string]FileState{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
 		}
 		rel, rerr := filepath.Rel(root, path)
 		if rerr != nil {
@@ -102,7 +121,7 @@ func ScanTree(root string, exclude []string) (map[string]FileState, error) {
 		if ierr != nil {
 			return ierr
 		}
-		hash, herr := hashFile(path)
+		hash, herr := hashFile(ctx, path)
 		if herr != nil {
 			return herr
 		}
