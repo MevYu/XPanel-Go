@@ -17,6 +17,9 @@ var ErrPathEscape = errors.New("path escapes root")
 //     (挡掉 "../"、绝对路径、多重 "..")。
 //  2. 解析候选路径已存在部分的真实路径(EvalSymlinks),确认真实路径仍在 root 内
 //     (挡掉指向 root 外的符号链接逃逸)。
+//  3. 若最终段本身是符号链接(含指向 root 外不存在目标的 dangling 软链),
+//     一律拒绝(O_NOFOLLOW 语义)——否则 EvalSymlinks 对 dangling 目标走词法回退,
+//     create/write 会跟随软链把文件写到 root 外。
 //
 // root 必须是已存在的绝对路径(调用方负责)。rel 为空或 "." 表示 root 本身。
 func SafeJoin(root, rel string) (string, error) {
@@ -37,6 +40,13 @@ func SafeJoin(root, rel string) (string, error) {
 	}
 	if !withinRoot(root, resolved) {
 		return "", ErrPathEscape
+	}
+
+	// 最终段若是符号链接(即便 dangling),写/创建会跟随它逃逸 root,直接拒绝。
+	if candidate != root {
+		if fi, err := os.Lstat(candidate); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return "", ErrPathEscape
+		}
 	}
 	return candidate, nil
 }

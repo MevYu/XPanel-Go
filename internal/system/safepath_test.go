@@ -111,6 +111,43 @@ func TestSafeJoinAllowsInternalSymlink(t *testing.T) {
 	}
 }
 
+func TestSafeJoinRejectsDanglingSymlinkLeaf(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	outside := t.TempDir()
+	root := t.TempDir()
+	// root/evil -> outside/target.txt(目标尚不存在,dangling 软链)。
+	target := filepath.Join(outside, "target.txt")
+	if err := os.Symlink(target, filepath.Join(root, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := SafeJoin(root, "evil")
+	if err != ErrPathEscape {
+		t.Fatalf("dangling symlink leaf want ErrPathEscape, got err=%v path=%q", err, got)
+	}
+	if got != "" {
+		t.Fatalf("must not return a writable path, got %q", got)
+	}
+	// 确认软链未被跟随写穿越:即便用返回值(应为空)也不会创建 outside/target.txt。
+	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("traversal target unexpectedly exists: %v", statErr)
+	}
+}
+
+func TestSafeJoinAllowsNonexistentLeaf(t *testing.T) {
+	root := t.TempDir()
+	// 普通不存在的文件名(合法 create)→ 正常返回、无错误。
+	got, err := SafeJoin(root, "newfile.txt")
+	if err != nil {
+		t.Fatalf("legitimate create rejected: %v", err)
+	}
+	want := filepath.Join(root, "newfile.txt")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestSafeJoinNonexistentChildAllowed(t *testing.T) {
 	root := t.TempDir()
 	// 尚不存在的文件(待写入)其父目录在 root 内 → 允许。
