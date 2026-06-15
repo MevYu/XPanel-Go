@@ -15,15 +15,15 @@ var ErrShareNotFound = errors.New("share not found")
 
 // Share 是一条外链分享记录。RelPath 相对面板根,作为该分享的独立子树根。
 type Share struct {
-	Token       string
-	RelPath     string // 相对面板文件根的路径,公开访问以此为新根
-	OwnerID     int64
-	PassHash    string // argon2 PHC;空串表示无密码
-	AllowList   bool   // 是否允许列目录;false 时仅单文件直下
-	ExpiresAt   int64  // unix 秒;0 表示永不过期
-	MaxDownloads int64 // 下载次数上限;0 表示不限
-	Downloads   int64  // 已下载次数
-	CreatedAt   int64
+	Token        string
+	RelPath      string // 相对面板文件根的路径,公开访问以此为新根
+	OwnerID      int64
+	PassHash     string // argon2 PHC;空串表示无密码
+	AllowList    bool   // 是否允许列目录;false 时仅单文件直下
+	ExpiresAt    int64  // unix 秒;0 表示永不过期
+	MaxDownloads int64  // 下载次数上限;0 表示不限
+	Downloads    int64  // 已下载次数
+	CreatedAt    int64
 }
 
 // shareSchema 幂等建表。模块自管,不进 store.migrations。

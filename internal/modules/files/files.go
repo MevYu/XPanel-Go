@@ -435,10 +435,10 @@ func (m *Module) handleExtract(w http.ResponseWriter, r *http.Request) {
 
 type shareCreateReq struct {
 	Path         string `json:"path"`
-	Password     string `json:"password"`      // 可选
-	AllowList    bool   `json:"allow_list"`    // 是否允许列目录
+	Password     string `json:"password"`       // 可选
+	AllowList    bool   `json:"allow_list"`     // 是否允许列目录
 	ExpiresInSec int64  `json:"expires_in_sec"` // 0 表示永不过期
-	MaxDownloads int64  `json:"max_downloads"` // 0 表示不限
+	MaxDownloads int64  `json:"max_downloads"`  // 0 表示不限
 }
 
 type shareResp struct {
