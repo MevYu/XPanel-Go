@@ -17,7 +17,10 @@ func Open(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 外键约束默认关闭,显式开启
+	// PRAGMA 只作用于执行它的那条连接;database/sql 连接池会让其它/后续
+	// 连接外键仍处于关闭状态,文件 DB 下约束静默失效。限单连接后,这条
+	// PRAGMA 对整个生命周期生效(也避免 :memory: 每连接独立库的隐患)。
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		db.Close()
 		return nil, err

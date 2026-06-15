@@ -20,3 +20,25 @@ func TestOpenRunsMigrations(t *testing.T) {
 		}
 	}
 }
+
+func TestForeignKeysEnforced(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	if _, err := s.DB.Exec(
+		`INSERT INTO users (username, pass_hash, created_at) VALUES ('alice', 'x', 0)`,
+	); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	// user_id=999 不存在,FK 约束必须拒绝插入
+	_, err = s.DB.Exec(
+		`INSERT INTO refresh_tokens (id, user_id, expires_at) VALUES ('t1', 999, 0)`,
+	)
+	if err == nil {
+		t.Fatal("expected foreign key constraint error, got nil")
+	}
+}
