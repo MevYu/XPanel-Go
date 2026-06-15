@@ -51,7 +51,7 @@ func TestRefreshRotatesAndRevokes(t *testing.T) {
 	svc.Register("admin", "pw-123456", "admin")
 	tok, _ := svc.Login("admin", "pw-123456", "1.2.3.4")
 
-	next, err := svc.Refresh(tok.Refresh)
+	next, err := svc.Refresh(tok.Refresh, "1.2.3.4")
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestRefreshRotatesAndRevokes(t *testing.T) {
 		t.Error("refresh should rotate to a new token")
 	}
 	// 旧 refresh 已被撤销
-	if _, err := svc.Refresh(tok.Refresh); err != ErrInvalidCredentials {
+	if _, err := svc.Refresh(tok.Refresh, "1.2.3.4"); err != ErrInvalidCredentials {
 		t.Errorf("old refresh should be revoked, got %v", err)
 	}
 }
@@ -68,10 +68,23 @@ func TestLogoutRevokesRefresh(t *testing.T) {
 	svc, _ := newTestService(t)
 	svc.Register("admin", "pw-123456", "admin")
 	tok, _ := svc.Login("admin", "pw-123456", "1.2.3.4")
-	if err := svc.Logout(tok.Refresh); err != nil {
+	if err := svc.Logout(tok.Refresh, "1.2.3.4"); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if _, err := svc.Refresh(tok.Refresh); err != ErrInvalidCredentials {
+	if _, err := svc.Refresh(tok.Refresh, "1.2.3.4"); err != ErrInvalidCredentials {
 		t.Errorf("after logout refresh must fail, got %v", err)
+	}
+}
+
+func TestFailedLoginWritesAudit(t *testing.T) {
+	svc, st := newTestService(t)
+	svc.Register("admin", "pw-123456", "admin")
+	if _, err := svc.Login("admin", "wrong", "9.9.9.9"); err != ErrInvalidCredentials {
+		t.Fatalf("want ErrInvalidCredentials, got %v", err)
+	}
+	var n int
+	st.DB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = ?`, "login.failure").Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 login.failure audit row, got %d", n)
 	}
 }

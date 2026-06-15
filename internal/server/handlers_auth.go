@@ -50,7 +50,11 @@ func (a *authHandlers) refresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	tok, err := a.svc.Refresh(req.Refresh)
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	tok, err := a.svc.Refresh(req.Refresh, ip)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -64,8 +68,12 @@ func (a *authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
 	// 忽略错误:logout 幂等,且不泄露 token 是否存在。
-	_ = a.svc.Logout(req.Refresh)
+	_ = a.svc.Logout(req.Refresh, ip)
 	w.WriteHeader(http.StatusNoContent)
 }
 

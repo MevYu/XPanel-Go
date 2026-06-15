@@ -56,18 +56,21 @@ func (s *Service) Login(username, password, ip string) (Tokens, error) {
 	if err != nil {
 		VerifyPassword(dummyHash(), password) // 抹平时序,结果丢弃
 		s.lockout.Fail(key)
+		_ = s.store.WriteAudit(nil, "login.failure", username, ip)
 		return Tokens{}, ErrInvalidCredentials
 	}
 	if !VerifyPassword(u.PassHash, password) {
 		s.lockout.Fail(key)
+		_ = s.store.WriteAudit(nil, "login.failure", username, ip)
 		return Tokens{}, ErrInvalidCredentials
 	}
 	s.lockout.Reset(key)
+	_ = s.store.WriteAudit(&u.ID, "login.success", "", ip)
 	return s.issue(u.ID, u.Role)
 }
 
 // Refresh 旋转:校验旧 refresh → 撤销 → 发新对。
-func (s *Service) Refresh(refresh string) (Tokens, error) {
+func (s *Service) Refresh(refresh, ip string) (Tokens, error) {
 	rt, err := s.store.GetValidRefreshToken(refresh)
 	if err != nil {
 		return Tokens{}, ErrInvalidCredentials
@@ -79,10 +82,12 @@ func (s *Service) Refresh(refresh string) (Tokens, error) {
 	if err := s.store.RevokeRefreshToken(refresh); err != nil {
 		return Tokens{}, err
 	}
+	_ = s.store.WriteAudit(&user.ID, "token.refresh", "", ip)
 	return s.issue(user.ID, user.Role)
 }
 
-func (s *Service) Logout(refresh string) error {
+func (s *Service) Logout(refresh, ip string) error {
+	_ = s.store.WriteAudit(nil, "logout", "", ip)
 	return s.store.RevokeRefreshToken(refresh)
 }
 

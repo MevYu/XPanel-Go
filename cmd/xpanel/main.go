@@ -51,6 +51,7 @@ func main() {
 		if err := svc.Register("admin", pw, "admin"); err != nil {
 			log.Fatalf("bootstrap admin: %v", err)
 		}
+		_ = st.WriteAudit(nil, "bootstrap.admin", "admin", "system")
 		fmt.Printf("==== XPanel 首次启动 ====\n用户名: admin\n密码: %s\n(请立即登录并修改)\n", pw)
 	}
 
