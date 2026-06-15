@@ -84,3 +84,43 @@ func TestSettingsDefaultAndOverride(t *testing.T) {
 		t.Fatalf("override not persisted, got %+v", set)
 	}
 }
+
+// TestLoadSettingsRevalidatesPersistedValues 锁定 Low 修复:旁路 PUT 校验直接写入 DB 的
+// 非法值(相对路径、坏解释器)在载入时被重新校验并回退默认,不进入命令/路径拼接。
+func TestLoadSettingsRevalidatesPersistedValues(t *testing.T) {
+	ss := newTestStore(t)
+	// 直接写库,绕过 saveSettings/PUT 的校验,模拟脏数据。
+	dirty := map[string]string{
+		settingProjectRoot: "relative/dir",    // 非绝对
+		settingVenvRoot:    "/bad\nnewline",   // 含控制字符
+		settingInterpreter: "python2; rm -rf", // 坏解释器
+		settingConfDir:     "/etc/ok",         // 合法,应保留
+		settingLogDir:      "../escape",       // 非绝对
+	}
+	const q = `INSERT INTO python_settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+	for k, v := range dirty {
+		if _, err := ss.db.Exec(q, k, v); err != nil {
+			t.Fatalf("seed dirty %s: %v", k, err)
+		}
+	}
+	set, err := ss.loadSettings()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if set.ProjectRoot != defaultProjectRoot {
+		t.Errorf("invalid project_root must fall back to default, got %q", set.ProjectRoot)
+	}
+	if set.VenvRoot != defaultVenvRoot {
+		t.Errorf("invalid venv_root must fall back to default, got %q", set.VenvRoot)
+	}
+	if set.Interpreter != defaultInterpreter {
+		t.Errorf("invalid interpreter must fall back to default, got %q", set.Interpreter)
+	}
+	if set.LogDir != defaultLogDir {
+		t.Errorf("invalid log_dir must fall back to default, got %q", set.LogDir)
+	}
+	if set.ConfDir != "/etc/ok" {
+		t.Errorf("valid conf_dir must be kept, got %q", set.ConfDir)
+	}
+}

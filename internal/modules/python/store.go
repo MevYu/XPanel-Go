@@ -139,6 +139,8 @@ func (s *pyStore) delete(id int64) error {
 }
 
 // loadSettings 读设置,缺失的 key 回退到默认值。
+// 持久化值在载入时按与写入时相同的规则重新校验:非法值(如被旁路写入的相对路径/坏解释器)
+// 不予采用,回退该字段默认值。防止绕过 PUT 校验的脏数据进入命令/路径拼接。
 func (s *pyStore) loadSettings() (Settings, error) {
 	out := DefaultSettings()
 	rows, err := s.db.Query(`SELECT key, value FROM python_settings`)
@@ -153,15 +155,25 @@ func (s *pyStore) loadSettings() (Settings, error) {
 		}
 		switch k {
 		case settingProjectRoot:
-			out.ProjectRoot = v
+			if ValidDir(v) {
+				out.ProjectRoot = v
+			}
 		case settingVenvRoot:
-			out.VenvRoot = v
+			if ValidDir(v) {
+				out.VenvRoot = v
+			}
 		case settingInterpreter:
-			out.Interpreter = v
+			if ValidPythonVersion(v) {
+				out.Interpreter = v
+			}
 		case settingConfDir:
-			out.ConfDir = v
+			if ValidDir(v) {
+				out.ConfDir = v
+			}
 		case settingLogDir:
-			out.LogDir = v
+			if ValidDir(v) {
+				out.LogDir = v
+			}
 		}
 	}
 	return out, rows.Err()

@@ -7,7 +7,8 @@
 //   - 项目名/构件路径/JVM 参数/端口/JDK 版本/部署类型全部白名单校验,非法即拒,绝不拼进配置或 exec 参数。
 //   - JVM 参数拆成 exec 参数数组,绝不拼 shell。
 //   - 构件路径限定在可配置基目录内,拒绝路径穿越。
-//   - 变更需 operator+;删除/停止为危险操作,需 admin + X-Confirm-Danger + 审计。
+//   - 创建项目可指定任意命令/JVM 参数(以 supervisor 属主执行),需 admin;start/stop/restart 等不定义新命令的操作 operator+。
+//   - 删除/停止为危险操作,需 admin + X-Confirm-Danger + 审计。
 //   - 可配置路径(项目根基目录/JDK 目录/Tomcat 目录/进程配置目录/日志目录)持久化在 java_settings 表,仅 admin 可改。
 package java
 
@@ -99,7 +100,7 @@ func (m *Module) HealthCheck() error { return m.pm.Available() }
 
 func (m *Module) Routes(r module.Router) {
 	r.Get("/projects", m.handleList)                                   // 只读
-	r.Post("/projects", m.handleCreate)                                // 写:operator+
+	r.Post("/projects", m.handleCreate)                                // 写:admin(可指定任意命令/JVM 参数 → 提权风险)
 	r.Delete("/projects/{id}", m.handleDelete)                         // 危险写:admin + 确认
 	r.Get("/projects/{id}/status", m.handleStatus)                     // 只读
 	r.Get("/projects/{id}/logs", m.handleLogs)                         // 只读
@@ -131,8 +132,10 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, ps)
 }
 
+// handleCreate 创建项目:可指定任意 JVM 参数/构件路径,进程以 supervisor 属主(通常 root)执行,
+// 故须 admin —— operator 不得借此定义任意命令获得提权。start/stop/restart 等不定义新命令的操作仍是 operator+。
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
-	uid, ok := m.requireWriter(w, r)
+	uid, ok := m.requireAdmin(w, r)
 	if !ok {
 		return
 	}

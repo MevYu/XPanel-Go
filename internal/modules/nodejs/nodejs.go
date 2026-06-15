@@ -5,7 +5,8 @@
 // 安全要点:
 //   - 项目名/目录/启动命令/端口/Node 版本全部白名单校验,非法即拒,绝不拼进配置或 exec 参数。
 //   - 项目目录限定在可配置基目录内,拒绝路径穿越。
-//   - 变更需 operator+;删除/停止为危险操作,需 admin + X-Confirm-Danger + 审计。
+//   - 创建项目可指定任意启动命令(以 supervisor 属主执行),需 admin;start/stop/restart 等不定义新命令的操作 operator+。
+//   - 删除/停止为危险操作,需 admin + X-Confirm-Danger + 审计。
 //   - 可配置路径(项目根基目录/Node 安装目录/进程配置目录/日志目录)持久化在 nodejs_settings 表,仅 admin 可改。
 package nodejs
 
@@ -92,7 +93,7 @@ func (m *Module) HealthCheck() error { return m.pm.Available() }
 
 func (m *Module) Routes(r module.Router) {
 	r.Get("/projects", m.handleList)                                   // 只读
-	r.Post("/projects", m.handleCreate)                                // 写:operator+
+	r.Post("/projects", m.handleCreate)                                // 写:admin(可指定任意启动命令 → 提权风险)
 	r.Delete("/projects/{id}", m.handleDelete)                         // 危险写:admin + 确认
 	r.Get("/projects/{id}/status", m.handleStatus)                     // 只读
 	r.Get("/projects/{id}/logs", m.handleLogs)                         // 只读
@@ -123,8 +124,10 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, ps)
 }
 
+// handleCreate 创建项目:可指定任意启动命令,该命令以 supervisor 属主(通常 root)执行,
+// 故须 admin —— operator 不得借此定义任意命令获得提权。start/stop/restart 等不定义新命令的操作仍是 operator+。
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
-	uid, ok := m.requireWriter(w, r)
+	uid, ok := m.requireAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -158,7 +161,9 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	dir, err := safeProjectDir(set.BaseDir, req.Directory)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// 错误详情含 base 路径,仅记日志;响应给通用文案,避免泄露服务端目录布局。
+		log.Printf("nodejs: invalid project directory: %v", err)
+		http.Error(w, "invalid directory", http.StatusBadRequest)
 		return
 	}
 

@@ -97,7 +97,7 @@ func TestHealthCheckUnavailable(t *testing.T) {
 
 func TestCreateHappyPath(t *testing.T) {
 	pm := &mockPM{}
-	m, audited := newTestModule(t, "operator", pm)
+	m, audited := newTestModule(t, "admin", pm)
 	body := `{"name":"web","directory":"web","command":"node app.js","port":3000,"node_version":"18.19.0"}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusCreated {
@@ -119,7 +119,7 @@ func TestCreateHappyPath(t *testing.T) {
 
 func TestCreateRejectsInjectionName(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web;rm -rf /","directory":"web","command":"node app.js","port":3000}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -132,7 +132,7 @@ func TestCreateRejectsInjectionName(t *testing.T) {
 
 func TestCreateRejectsInjectionCommand(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := "{\"name\":\"web\",\"directory\":\"web\",\"command\":\"node app.js\\nmalicious=1\",\"port\":3000}"
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -142,7 +142,7 @@ func TestCreateRejectsInjectionCommand(t *testing.T) {
 
 func TestCreateRejectsPathTraversal(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","directory":"../../etc","command":"node app.js","port":3000}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -155,7 +155,7 @@ func TestCreateRejectsPathTraversal(t *testing.T) {
 
 func TestCreateRejectsBadPort(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","directory":"web","command":"node app.js","port":0}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -165,7 +165,7 @@ func TestCreateRejectsBadPort(t *testing.T) {
 
 func TestCreateRejectsBadNodeVersion(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","directory":"web","command":"node app.js","port":3000,"node_version":"latest; rm"}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -173,7 +173,7 @@ func TestCreateRejectsBadNodeVersion(t *testing.T) {
 	}
 }
 
-func TestCreateRequiresWriter(t *testing.T) {
+func TestCreateRequiresAdmin(t *testing.T) {
 	pm := &mockPM{}
 	m, audited := newTestModule(t, "readonly", pm)
 	body := `{"name":"web","directory":"web","command":"node app.js","port":3000}`
@@ -183,6 +183,52 @@ func TestCreateRequiresWriter(t *testing.T) {
 	}
 	if *audited != 0 || len(pm.applies) != 0 {
 		t.Fatal("forbidden create must not audit or apply")
+	}
+}
+
+// TestCreateOperatorForbidden 复现并锁定提权漏洞修复:operator 指定任意启动命令创建项目
+// 必须 403 —— 否则 operator 可借此让命令以 supervisor 属主(通常 root)执行而提权。
+func TestCreateOperatorForbidden(t *testing.T) {
+	pm := &mockPM{}
+	m, audited := newTestModule(t, "operator", pm)
+	body := `{"name":"pwn","directory":"web","command":"/bin/sh -c id","port":3000}`
+	rec := do(m, "POST", "/projects", body, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator create (arbitrary command) must 403, got %d", rec.Code)
+	}
+	if *audited != 0 || len(pm.applies) != 0 {
+		t.Fatal("forbidden operator create must not audit or apply")
+	}
+}
+
+// TestOperatorCanStartStop 确认收紧 create 后,operator 仍可对已有项目执行 start/stop/restart。
+func TestOperatorCanStartStop(t *testing.T) {
+	pm := &mockPM{}
+	m, _ := newTestModule(t, "operator", pm)
+	id := seedProject(t, m)
+	if rec := do(m, "POST", "/projects/"+id+"/restart", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator restart should 200, got %d", rec.Code)
+	}
+	if rec := do(m, "POST", "/projects/"+id+"/start", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator start should 200, got %d", rec.Code)
+	}
+	rec := do(m, "POST", "/projects/"+id+"/stop", "", map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operator stop (confirmed) should 200, got %d", rec.Code)
+	}
+}
+
+// TestCreateBadDirNoBaseLeak 确认非法目录错误响应不泄露服务端 base 路径(仅记日志)。
+func TestCreateBadDirNoBaseLeak(t *testing.T) {
+	pm := &mockPM{}
+	m, _ := newTestModule(t, "admin", pm)
+	body := `{"name":"web","directory":"../../etc","command":"node app.js","port":3000}`
+	rec := do(m, "POST", "/projects", body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("path escape should 400, got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "/www/nodejs") || strings.Contains(rec.Body.String(), "base") {
+		t.Fatalf("error must not leak base path, got %q", rec.Body.String())
 	}
 }
 
@@ -318,11 +364,24 @@ func TestListEmptyReturnsArray(t *testing.T) {
 	}
 }
 
-// seedProject 经由真实 create handler 落一条项目,返回其 id 字符串。
+// cloneRole 在同一 DB/PM 上复制一个不同角色的 Module 视图,用于跨角色访问已有数据。
+func cloneRole(m *Module, role string) *Module {
+	return &Module{
+		ns: m.ns,
+		pm: m.pm,
+		deps: Deps{
+			Principal: func(*http.Request) (int64, string) { return 2, role },
+			Audit:     func(*int64, string, string, string) {},
+		},
+	}
+}
+
+// seedProject 以 admin 身份经真实 create handler 落一条项目(创建需 admin),返回其 id 字符串。
+// 用 admin 克隆而非传入的 m,使 operator 视图的 start/stop 测试也能拿到种子数据。
 func seedProject(t *testing.T, m *Module) string {
 	t.Helper()
 	body := `{"name":"web","directory":"web","command":"node app.js","port":3000}`
-	rec := do(m, "POST", "/projects", body, nil)
+	rec := do(cloneRole(m, "admin"), "POST", "/projects", body, nil)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("seed failed: %d %s", rec.Code, rec.Body.String())
 	}

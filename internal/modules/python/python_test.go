@@ -90,9 +90,12 @@ func do(m *Module, method, target, body string, headers map[string]string) *http
 
 const validBody = `{"name":"api","interpreter":"python3.11","start_kind":"gunicorn","app_target":"wsgi:app","port":8000,"workers":3}`
 
+// seedProject 以 admin 身份经真实 create handler 落一条项目(创建需 admin),返回其 id 字符串。
+// 用 admin 克隆而非传入的 m,使 operator 视图的 start/stop 测试也能拿到种子数据。
 func seedProject(t *testing.T, m *Module) string {
 	t.Helper()
-	rec := do(m, "POST", "/projects", validBody, nil)
+	admin, _ := cloneRole(t, m, "admin")
+	rec := do(admin, "POST", "/projects", validBody, nil)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("seed failed: %d %s", rec.Code, rec.Body.String())
 	}
@@ -113,7 +116,7 @@ func TestMetaSwitchable(t *testing.T) {
 func TestCreateHappyPath(t *testing.T) {
 	prov := &mockProv{}
 	rn := &mockRunner{}
-	m, audited := newTestModule(t, "operator", prov, rn)
+	m, audited := newTestModule(t, "admin", prov, rn)
 	rec := do(m, "POST", "/projects", validBody, nil)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
@@ -134,7 +137,7 @@ func TestCreateHappyPath(t *testing.T) {
 
 func TestCreateUsesDefaultInterpreter(t *testing.T) {
 	prov := &mockProv{}
-	m, _ := newTestModule(t, "operator", prov, &mockRunner{})
+	m, _ := newTestModule(t, "admin", prov, &mockRunner{})
 	body := `{"name":"api","start_kind":"script","app_target":"run.py"}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusCreated {
@@ -148,7 +151,7 @@ func TestCreateUsesDefaultInterpreter(t *testing.T) {
 func TestCreateRejectsInjectionName(t *testing.T) {
 	prov := &mockProv{}
 	rn := &mockRunner{}
-	m, _ := newTestModule(t, "operator", prov, rn)
+	m, _ := newTestModule(t, "admin", prov, rn)
 	body := `{"name":"api;rm -rf /","interpreter":"python3","start_kind":"script","app_target":"run.py"}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -160,7 +163,7 @@ func TestCreateRejectsInjectionName(t *testing.T) {
 }
 
 func TestCreateRejectsInjectionAppTarget(t *testing.T) {
-	m, _ := newTestModule(t, "operator", &mockProv{}, &mockRunner{})
+	m, _ := newTestModule(t, "admin", &mockProv{}, &mockRunner{})
 	body := `{"name":"api","interpreter":"python3","start_kind":"gunicorn","app_target":"wsgi:app$(id)","port":8000}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -169,7 +172,7 @@ func TestCreateRejectsInjectionAppTarget(t *testing.T) {
 }
 
 func TestCreateRejectsBadInterpreter(t *testing.T) {
-	m, _ := newTestModule(t, "operator", &mockProv{}, &mockRunner{})
+	m, _ := newTestModule(t, "admin", &mockProv{}, &mockRunner{})
 	body := `{"name":"api","interpreter":"python2; rm","start_kind":"script","app_target":"run.py"}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -178,7 +181,7 @@ func TestCreateRejectsBadInterpreter(t *testing.T) {
 }
 
 func TestCreateRejectsBadPortForServer(t *testing.T) {
-	m, _ := newTestModule(t, "operator", &mockProv{}, &mockRunner{})
+	m, _ := newTestModule(t, "admin", &mockProv{}, &mockRunner{})
 	body := `{"name":"api","interpreter":"python3","start_kind":"uvicorn","app_target":"main:app","port":0}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -186,7 +189,7 @@ func TestCreateRejectsBadPortForServer(t *testing.T) {
 	}
 }
 
-func TestCreateRequiresWriter(t *testing.T) {
+func TestCreateRequiresAdmin(t *testing.T) {
 	prov := &mockProv{}
 	m, audited := newTestModule(t, "readonly", prov, &mockRunner{})
 	rec := do(m, "POST", "/projects", validBody, nil)
@@ -198,9 +201,40 @@ func TestCreateRequiresWriter(t *testing.T) {
 	}
 }
 
+// TestCreateOperatorForbidden 复现并锁定提权漏洞修复:operator 指定启动方式/入口创建项目
+// 必须 403 —— 否则 operator 可借此让进程以 supervisor 属主(通常 root)执行而提权。
+func TestCreateOperatorForbidden(t *testing.T) {
+	prov := &mockProv{}
+	rn := &mockRunner{}
+	m, audited := newTestModule(t, "operator", prov, rn)
+	rec := do(m, "POST", "/projects", validBody, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator create must 403, got %d", rec.Code)
+	}
+	if *audited != 0 || len(prov.venvs) != 0 || len(rn.applies) != 0 {
+		t.Fatal("forbidden operator create must not audit, provision or apply")
+	}
+}
+
+// TestOperatorCanStartStop 确认收紧 create 后,operator 仍可对已有项目执行 start/stop/restart。
+func TestOperatorCanStartStop(t *testing.T) {
+	m, _ := newTestModule(t, "operator", &mockProv{}, &mockRunner{})
+	id := seedProject(t, m)
+	if rec := do(m, "POST", "/projects/"+id+"/restart", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator restart should 200, got %d", rec.Code)
+	}
+	if rec := do(m, "POST", "/projects/"+id+"/start", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator start should 200, got %d", rec.Code)
+	}
+	rec := do(m, "POST", "/projects/"+id+"/stop", "", map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operator stop (confirmed) should 200, got %d", rec.Code)
+	}
+}
+
 func TestCreateRollsBackOnVenvFailure(t *testing.T) {
 	prov := &mockProv{venvErr: http.ErrNotSupported}
-	m, _ := newTestModule(t, "operator", prov, &mockRunner{})
+	m, _ := newTestModule(t, "admin", prov, &mockRunner{})
 	rec := do(m, "POST", "/projects", validBody, nil)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("venv failure should 500, got %d", rec.Code)

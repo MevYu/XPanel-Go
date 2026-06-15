@@ -110,7 +110,7 @@ func TestHealthCheckUnavailable(t *testing.T) {
 
 func TestCreateJarHappyPath(t *testing.T) {
 	pm := &mockPM{}
-	m, audited := newTestModule(t, "operator", pm)
+	m, audited := newTestModule(t, "admin", pm)
 	body := `{"name":"web","type":"jar","artifact_path":"web/app.jar","java_version":"17","jvm_args":"-Xmx512m","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusCreated {
@@ -135,7 +135,7 @@ func TestCreateJarHappyPath(t *testing.T) {
 
 func TestCreateTomcatDeploysWar(t *testing.T) {
 	pm := &mockPM{}
-	m, audited := newTestModule(t, "operator", pm)
+	m, audited := newTestModule(t, "admin", pm)
 	body := `{"name":"shop","type":"tomcat","artifact_path":"shop/shop.war","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusCreated {
@@ -157,7 +157,7 @@ func TestCreateTomcatDeploysWar(t *testing.T) {
 
 func TestCreateTomcatRejectsJarArtifact(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"shop","type":"tomcat","artifact_path":"shop/shop.jar","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -170,7 +170,7 @@ func TestCreateTomcatRejectsJarArtifact(t *testing.T) {
 
 func TestCreateRejectsBadType(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","type":"exe","artifact_path":"web/app.jar","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -180,7 +180,7 @@ func TestCreateRejectsBadType(t *testing.T) {
 
 func TestCreateRejectsInjectionName(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web;rm -rf /","type":"jar","artifact_path":"web/app.jar","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -193,7 +193,7 @@ func TestCreateRejectsInjectionName(t *testing.T) {
 
 func TestCreateRejectsInjectionJVMArgs(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := "{\"name\":\"web\",\"type\":\"jar\",\"artifact_path\":\"web/app.jar\",\"jvm_args\":\"-Xmx1g; rm -rf /\",\"port\":8080}"
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -206,7 +206,7 @@ func TestCreateRejectsInjectionJVMArgs(t *testing.T) {
 
 func TestCreateRejectsPathTraversal(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","type":"jar","artifact_path":"../../etc/app.jar","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -219,7 +219,7 @@ func TestCreateRejectsPathTraversal(t *testing.T) {
 
 func TestCreateRejectsBadPort(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","type":"jar","artifact_path":"web/app.jar","port":0}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -229,7 +229,7 @@ func TestCreateRejectsBadPort(t *testing.T) {
 
 func TestCreateRejectsBadJavaVersion(t *testing.T) {
 	pm := &mockPM{}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","type":"jar","artifact_path":"web/app.jar","java_version":"latest; rm","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -237,7 +237,7 @@ func TestCreateRejectsBadJavaVersion(t *testing.T) {
 	}
 }
 
-func TestCreateRequiresWriter(t *testing.T) {
+func TestCreateRequiresAdmin(t *testing.T) {
 	pm := &mockPM{}
 	m, audited := newTestModule(t, "readonly", pm)
 	body := `{"name":"web","type":"jar","artifact_path":"web/app.jar","port":8080}`
@@ -247,6 +247,38 @@ func TestCreateRequiresWriter(t *testing.T) {
 	}
 	if *audited != 0 || len(pm.applies) != 0 {
 		t.Fatal("forbidden create must not audit or apply")
+	}
+}
+
+// TestCreateOperatorForbidden 复现并锁定提权漏洞修复:operator 指定任意 JVM 参数/命令创建项目
+// 必须 403 —— 否则 operator 可借此让进程以 supervisor 属主(通常 root)执行而提权。
+func TestCreateOperatorForbidden(t *testing.T) {
+	pm := &mockPM{}
+	m, audited := newTestModule(t, "operator", pm)
+	body := `{"name":"pwn","type":"jar","artifact_path":"web/app.jar","jvm_args":"-Xmx512m","port":8080}`
+	rec := do(m, "POST", "/projects", body, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator create (arbitrary command) must 403, got %d", rec.Code)
+	}
+	if *audited != 0 || len(pm.applies) != 0 || len(pm.deploys) != 0 {
+		t.Fatal("forbidden operator create must not audit, apply or deploy")
+	}
+}
+
+// TestOperatorCanStartStop 确认收紧 create 后,operator 仍可对已有项目执行 start/stop/restart。
+func TestOperatorCanStartStop(t *testing.T) {
+	pm := &mockPM{}
+	m, _ := newTestModule(t, "operator", pm)
+	id := seedProject(t, m)
+	if rec := do(m, "POST", "/projects/"+id+"/restart", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator restart should 200, got %d", rec.Code)
+	}
+	if rec := do(m, "POST", "/projects/"+id+"/start", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator start should 200, got %d", rec.Code)
+	}
+	rec := do(m, "POST", "/projects/"+id+"/stop", "", map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operator stop (confirmed) should 200, got %d", rec.Code)
 	}
 }
 
@@ -422,7 +454,7 @@ func TestListEmptyReturnsArray(t *testing.T) {
 
 func TestCreateRollbackOnProvisionFailure(t *testing.T) {
 	pm := &mockPM{applyErr: http.ErrNotSupported}
-	m, _ := newTestModule(t, "operator", pm)
+	m, _ := newTestModule(t, "admin", pm)
 	body := `{"name":"web","type":"jar","artifact_path":"web/app.jar","port":8080}`
 	rec := do(m, "POST", "/projects", body, nil)
 	if rec.Code != http.StatusInternalServerError {
@@ -435,11 +467,23 @@ func TestCreateRollbackOnProvisionFailure(t *testing.T) {
 	}
 }
 
-// seedProject 经由真实 create handler 落一条 jar 项目,返回其 id 字符串。
+// cloneRole 在同一 DB/PM 上复制一个不同角色的 Module 视图,用于跨角色访问已有数据。
+func cloneRole(m *Module, role string) *Module {
+	return &Module{
+		js: m.js,
+		pm: m.pm,
+		deps: Deps{
+			Principal: func(*http.Request) (int64, string) { return 2, role },
+			Audit:     func(*int64, string, string, string) {},
+		},
+	}
+}
+
+// seedProject 以 admin 身份经真实 create handler 落一条 jar 项目(创建需 admin),返回其 id 字符串。
 func seedProject(t *testing.T, m *Module) string {
 	t.Helper()
 	body := `{"name":"web","type":"jar","artifact_path":"web/app.jar","port":8080}`
-	rec := do(m, "POST", "/projects", body, nil)
+	rec := do(cloneRole(m, "admin"), "POST", "/projects", body, nil)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("seed failed: %d %s", rec.Code, rec.Body.String())
 	}

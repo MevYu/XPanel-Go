@@ -93,7 +93,7 @@ func TestHealthCheckUnavailable(t *testing.T) {
 
 func TestCreateHappyPath(t *testing.T) {
 	ctl := &mockController{}
-	m, audited := newTestModule(t, "operator", ctl)
+	m, audited := newTestModule(t, "admin", ctl)
 	body := `{"name":"web","command":"/bin/run","directory":"/opt/web","auto_restart":true,"numprocs":2}`
 	rec := do(m, "POST", "/programs", body, nil)
 	if rec.Code != http.StatusCreated {
@@ -115,7 +115,7 @@ func TestCreateHappyPath(t *testing.T) {
 
 func TestCreateRejectsInjectionName(t *testing.T) {
 	ctl := &mockController{}
-	m, _ := newTestModule(t, "operator", ctl)
+	m, _ := newTestModule(t, "admin", ctl)
 	body := `{"name":"web;rm -rf /","command":"/bin/run","directory":"/opt","numprocs":1}`
 	rec := do(m, "POST", "/programs", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -128,7 +128,7 @@ func TestCreateRejectsInjectionName(t *testing.T) {
 
 func TestCreateRejectsInjectionCommand(t *testing.T) {
 	ctl := &mockController{}
-	m, _ := newTestModule(t, "operator", ctl)
+	m, _ := newTestModule(t, "admin", ctl)
 	body := "{\"name\":\"web\",\"command\":\"run\\nmalicious=1\",\"directory\":\"/opt\",\"numprocs\":1}"
 	rec := do(m, "POST", "/programs", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -138,7 +138,7 @@ func TestCreateRejectsInjectionCommand(t *testing.T) {
 
 func TestCreateRejectsRelativeDir(t *testing.T) {
 	ctl := &mockController{}
-	m, _ := newTestModule(t, "operator", ctl)
+	m, _ := newTestModule(t, "admin", ctl)
 	body := `{"name":"web","command":"/bin/run","directory":"relative","numprocs":1}`
 	rec := do(m, "POST", "/programs", body, nil)
 	if rec.Code != http.StatusBadRequest {
@@ -146,7 +146,7 @@ func TestCreateRejectsRelativeDir(t *testing.T) {
 	}
 }
 
-func TestCreateRequiresWriter(t *testing.T) {
+func TestCreateRequiresAdmin(t *testing.T) {
 	ctl := &mockController{}
 	m, audited := newTestModule(t, "readonly", ctl)
 	body := `{"name":"web","command":"/bin/run","directory":"/opt","numprocs":1}`
@@ -156,6 +156,38 @@ func TestCreateRequiresWriter(t *testing.T) {
 	}
 	if *audited != 0 || len(ctl.writes) != 0 {
 		t.Fatal("forbidden create must not audit or write")
+	}
+}
+
+// TestCreateOperatorForbidden 复现并锁定提权漏洞修复:operator 指定任意启动命令添加守护程序
+// 必须 403 —— 否则 operator 可借此让命令以 supervisor 属主(通常 root)执行而提权。
+func TestCreateOperatorForbidden(t *testing.T) {
+	ctl := &mockController{}
+	m, audited := newTestModule(t, "operator", ctl)
+	body := `{"name":"pwn","command":"/bin/sh -c id","directory":"/opt","numprocs":1}`
+	rec := do(m, "POST", "/programs", body, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator create (arbitrary command) must 403, got %d", rec.Code)
+	}
+	if *audited != 0 || len(ctl.writes) != 0 {
+		t.Fatal("forbidden operator create must not audit or write")
+	}
+}
+
+// TestOperatorCanStartStop 确认收紧 create 后,operator 仍可对已有程序执行 start/stop/restart。
+func TestOperatorCanStartStop(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "operator", ctl)
+	id := seedProgram(t, m)
+	if rec := do(m, "POST", "/programs/"+id+"/restart", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator restart should 200, got %d", rec.Code)
+	}
+	if rec := do(m, "POST", "/programs/"+id+"/start", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator start should 200, got %d", rec.Code)
+	}
+	rec := do(m, "POST", "/programs/"+id+"/stop", "", map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operator stop (confirmed) should 200, got %d", rec.Code)
 	}
 }
 
@@ -256,11 +288,23 @@ func TestListEmptyReturnsArray(t *testing.T) {
 	}
 }
 
-// seedProgram 经由真实 create handler 落一条程序,返回其 id 字符串。
+// cloneRole 在同一 DB/Controller 上复制一个不同角色的 Module 视图,用于跨角色访问已有数据。
+func cloneRole(m *Module, role string) *Module {
+	return &Module{
+		ss:  m.ss,
+		ctl: m.ctl,
+		deps: Deps{
+			Principal: func(*http.Request) (int64, string) { return 2, role },
+			Audit:     func(*int64, string, string, string) {},
+		},
+	}
+}
+
+// seedProgram 以 admin 身份经真实 create handler 落一条程序(创建需 admin),返回其 id 字符串。
 func seedProgram(t *testing.T, m *Module) string {
 	t.Helper()
 	body := `{"name":"web","command":"/bin/run","directory":"/opt/web","auto_restart":true,"numprocs":1}`
-	rec := do(m, "POST", "/programs", body, nil)
+	rec := do(cloneRole(m, "admin"), "POST", "/programs", body, nil)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("seed failed: %d %s", rec.Code, rec.Body.String())
 	}

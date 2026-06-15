@@ -54,7 +54,7 @@ func (m *Module) HealthCheck() error { return m.ctl.Available() }
 
 func (m *Module) Routes(r module.Router) {
 	r.Get("/programs", m.handleList)                                   // 只读
-	r.Post("/programs", m.handleCreate)                                // 写:operator+
+	r.Post("/programs", m.handleCreate)                                // 写:admin(可指定任意启动命令 → 提权风险)
 	r.Delete("/programs/{id}", m.handleDelete)                         // 危险写:admin + 确认
 	r.Get("/programs/{id}/status", m.handleStatus)                     // 只读
 	r.Get("/programs/{id}/logs", m.handleLogs)                         // 只读
@@ -84,8 +84,10 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, ps)
 }
 
+// handleCreate 添加守护程序:可指定任意启动命令,该命令以 supervisor 属主(通常 root)执行,
+// 故须 admin —— operator 不得借此定义任意命令获得提权。start/stop/restart 等不定义新命令的操作仍是 operator+。
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
-	uid, ok := m.requireWriter(w, r)
+	uid, ok := m.requireAdmin(w, r)
 	if !ok {
 		return
 	}
