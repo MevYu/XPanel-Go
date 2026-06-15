@@ -91,6 +91,31 @@ func TestDisableBlockedByDependent(t *testing.T) {
 	}
 }
 
+func TestRestoreOrderIndependent(t *testing.T) {
+	// 注册顺序故意把 child 放在 base 之前,验证 Restore 不依赖注册顺序。
+	base := &startStopModule{fakeModule: fakeModule{id: "base"}}
+	child := &startStopModule{fakeModule: fakeModule{id: "child", requires: []string{"base"}}}
+	mgr, st := newManager(t, child, base)
+	defer st.Close()
+
+	if err := st.SetModuleEnabled("base", true); err != nil {
+		t.Fatalf("persist base: %v", err)
+	}
+	if err := st.SetModuleEnabled("child", true); err != nil {
+		t.Fatalf("persist child: %v", err)
+	}
+
+	if err := mgr.Restore(); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !mgr.IsEnabled("base") || !base.started {
+		t.Error("base should be enabled+started after Restore")
+	}
+	if !mgr.IsEnabled("child") || !child.started {
+		t.Error("child should be enabled+started after Restore")
+	}
+}
+
 func TestAlwaysOnEnabledOnRestore(t *testing.T) {
 	always := &startStopModule{fakeModule: fakeModule{id: "dash", alwaysOn: true}}
 	mgr, st := newManager(t, always)

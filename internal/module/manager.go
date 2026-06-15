@@ -2,6 +2,7 @@ package module
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -50,8 +51,8 @@ func (mgr *Manager) Enable(id string) error {
 		return fmt.Errorf("module %q start failed: %w", id, err)
 	}
 	if err := mgr.store.SetModuleEnabled(id, true); err != nil {
-		_ = m.Stop(context.Background()) // 回滚已启动的后台任务
-		return err
+		// 回滚已启动的后台任务;Stop 错误并入返回值,以便诊断"已启动但标记为停用"的状态泄漏。
+		return errors.Join(err, m.Stop(context.Background()))
 	}
 	mgr.enabled[id] = true
 	return nil
@@ -91,18 +92,42 @@ func (mgr *Manager) Disable(id string) error {
 	return nil
 }
 
-// Restore 启动时调用:把 AlwaysOn 模块与上次持久化为 enabled 的模块依次启用。
+// Restore 启动时调用:启用 AlwaysOn 与上次持久化为 enabled 的模块。
+// 不依赖注册顺序——反复扫描,每轮启用依赖已满足的模块,直至无剩余或无进展。
 func (mgr *Manager) Restore() error {
 	persisted, err := mgr.store.EnabledModules()
 	if err != nil {
 		return err
 	}
+	want := make(map[string]bool)
 	for _, m := range mgr.reg.All() {
 		id := m.Meta().ID
 		if m.Meta().AlwaysOn || persisted[id] {
+			want[id] = true
+		}
+	}
+	for len(want) > 0 {
+		progressed := false
+		for id := range want {
+			m, _ := mgr.reg.Get(id)
+			ready := true
+			for _, dep := range m.Meta().Requires {
+				if !mgr.IsEnabled(dep) {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				continue
+			}
 			if err := mgr.Enable(id); err != nil {
 				return fmt.Errorf("restore %q: %w", id, err)
 			}
+			delete(want, id)
+			progressed = true
+		}
+		if !progressed {
+			return errors.New("restore: unsatisfiable module dependencies")
 		}
 	}
 	return nil

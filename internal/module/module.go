@@ -31,6 +31,7 @@ type Module interface {
 	Meta() ModuleMeta
 	Routes(r Router)         // 挂在 /api/m/<id>/ 命名空间下
 	Nav() []NavItem          // 前端导航项
+	// Start/Stop/HealthCheck 必须迅速返回、不得阻塞:Manager 在持有锁期间调用它们,长时间运行的后台工作须放进 detached goroutine。
 	Start(ctx Context) error // 启用时调用:起后台任务
 	Stop(ctx Context) error  // 停用时调用:优雅关闭
 	HealthCheck() error      // 依赖自检(如 systemctl 是否可用)
