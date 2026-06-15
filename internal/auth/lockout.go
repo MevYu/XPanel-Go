@@ -52,6 +52,7 @@ func (l *Lockout) Fail(key string) {
 		l.entries[key] = e
 	}
 	e.failures++
+	// 锁定期间继续失败会刷新 lockedAt,即持续攻击滑动延长锁定窗口(期望行为)。
 	if e.failures >= l.threshold {
 		e.lockedAt = l.now()
 	}

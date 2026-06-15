@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/MevYu/XPanel-Go/internal/store"
@@ -13,6 +14,12 @@ var (
 )
 
 const refreshTTL = 7 * 24 * time.Hour
+
+// dummyHash 在用户不存在时仍跑一次等价的 argon2 校验,抹平时序差,防止用户名枚举。
+var dummyHash = sync.OnceValue(func() string {
+	h, _ := HashPassword("xpanel-timing-equalizer")
+	return h
+})
 
 type Tokens struct {
 	Access  string
@@ -46,7 +53,12 @@ func (s *Service) Login(username, password, ip string) (Tokens, error) {
 		return Tokens{}, ErrLockedOut
 	}
 	u, err := s.store.GetUserByUsername(username)
-	if err != nil || !VerifyPassword(u.PassHash, password) {
+	if err != nil {
+		VerifyPassword(dummyHash(), password) // 抹平时序,结果丢弃
+		s.lockout.Fail(key)
+		return Tokens{}, ErrInvalidCredentials
+	}
+	if !VerifyPassword(u.PassHash, password) {
 		s.lockout.Fail(key)
 		return Tokens{}, ErrInvalidCredentials
 	}
