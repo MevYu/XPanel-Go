@@ -47,3 +47,14 @@ func (s *Store) CountUsers() (int, error) {
 	err := s.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
 	return n, err
 }
+
+func (s *Store) GetUserByID(id int64) (User, error) {
+	var u User
+	err := s.DB.QueryRow(
+		`SELECT id, username, pass_hash, role, created_at FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Username, &u.PassHash, &u.Role, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
