@@ -80,16 +80,15 @@ func (b *pureFTPd) list(ctx context.Context) ([]account, error) {
 	return accts, nil
 }
 
-func (b *pureFTPd) create(ctx context.Context, user, password, home string, readonly bool) error {
+func (b *pureFTPd) create(ctx context.Context, user, password, home string, _ bool) error {
 	if err := b.available(); err != nil {
 		return err
 	}
-	// -m 立即重建 .pdb;-f 单 cn;口令经 stdin(pure-pw 提示两次)。
+	// -m 立即重建 .pdb;口令经 stdin(pure-pw 提示两次)。
+	// 注:pure-pw 的 -r 是"限定允许的来源 IP",并非只读权限;旧代码 `-r ""` 既不实现
+	// 只读又传了无意义空参。pure-pw useradd 无逐用户只读开关(只读由 pure-ftpd 守护层
+	// 配置),故此处不据 readonly 传任何参数;只读意图仅落 XPanel 的账户元数据。
 	args := []string{"useradd", user, "-u", b.uid, "-g", b.gid, "-d", home, "-m"}
-	if readonly {
-		// 限制为仅下载(去掉上传/删除/改名/创建目录权限)。
-		args = append(args, "-r", "")
-	}
 	if _, err := b.run(ctx, passwordStdin(password), args...); err != nil {
 		return err
 	}

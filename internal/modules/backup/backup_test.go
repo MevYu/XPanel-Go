@@ -127,6 +127,62 @@ func do(t *testing.T, r chi.Router, method, path, body string, hdr map[string]st
 
 // --- tests ---
 
+func TestPutSettingsRejectsBadToolPath(t *testing.T) {
+	h := newHarness(t, "admin")
+	r := h.router()
+	bad := []string{
+		`{"mysqldump":"mysqldump; rm -rf /"}`,
+		`{"pgdump":"../../usr/bin/evil"}`,
+		`{"mysqldump":"bin/dump"}`,
+	}
+	for _, body := range bad {
+		rec := do(t, r, "PUT", "/settings", body, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("PUT settings %s = %d, want 400", body, rec.Code)
+		}
+	}
+	// 合法值(裸名 / 绝对路径)放行。
+	if rec := do(t, r, "PUT", "/settings", `{"mysqldump":"mysqldump","pgdump":"/usr/bin/pg_dump"}`, nil); rec.Code != http.StatusOK {
+		t.Errorf("valid tool paths = %d, want 200", rec.Code)
+	}
+}
+
+func TestAddRemoteRejectsBadEndpointRegion(t *testing.T) {
+	h := newHarness(t, "admin")
+	r := h.router()
+	bad := []string{
+		`{"name":"s3","type":"s3","endpoint":"not-a-url"}`,
+		`{"name":"s3","type":"s3","endpoint":"ftp://x"}`,
+		`{"name":"s3","type":"s3","region":"us east; rm"}`,
+	}
+	for _, body := range bad {
+		rec := do(t, r, "POST", "/remotes", body, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST remotes %s = %d, want 400", body, rec.Code)
+		}
+	}
+	if rec := do(t, r, "POST", "/remotes", `{"name":"good","type":"s3","endpoint":"https://s3.example.com","region":"us-east-1"}`, nil); rec.Code != http.StatusCreated {
+		t.Errorf("valid remote = %d, want 201", rec.Code)
+	}
+}
+
+func TestSettingsLoadDropsBadPersistedToolPath(t *testing.T) {
+	h := newHarness(t, "admin")
+	// 模拟手改 DB / 旧畸形值绕过写入校验:直接写一个注入态的 mysqldump 路径。
+	if _, err := h.m.bs.db.Exec(`INSERT INTO backup_settings (id, backup_dir, mysqldump, pgdump)
+		VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET mysqldump=excluded.mysqldump`,
+		h.backupD, "evil; rm -rf /", ""); err != nil {
+		t.Fatal(err)
+	}
+	s, err := h.m.bs.settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.MysqlDump != "mysqldump" {
+		t.Errorf("bad persisted mysqldump must fall back to default, got %q", s.MysqlDump)
+	}
+}
+
 func TestNonAdminForbidden(t *testing.T) {
 	h := newHarness(t, "operator")
 	r := h.router()

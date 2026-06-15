@@ -132,6 +132,10 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	if err := validateSettings(in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := m.bs.saveSettings(in); err != nil {
 		log.Printf("backup: settings save failed: %v", err)
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
@@ -172,6 +176,10 @@ func (m *Module) handleAddRemote(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Type == "" {
 		http.Error(w, "remote type required", http.StatusBadRequest)
+		return
+	}
+	if err := validateRemote(in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	saved, err := m.bs.addRemote(in)

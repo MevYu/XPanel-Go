@@ -95,10 +95,12 @@ func overlay(dst *Settings, got Settings) {
 	if got.ConfigDir != "" {
 		dst.ConfigDir = got.ConfigDir
 	}
-	if got.VirtualUID != "" {
+	// uid/gid 进 pure-pw -u/-g(可映射系统账户);载入时再校验,非法(尤其 0=root)
+	// 的旧值/手改 DB 一律回落默认,绝不把畸形/特权 id 喂给后端。
+	if got.VirtualUID != "" && validVirtualID(got.VirtualUID) {
 		dst.VirtualUID = got.VirtualUID
 	}
-	if got.VirtualGID != "" {
+	if got.VirtualGID != "" && validVirtualID(got.VirtualGID) {
 		dst.VirtualGID = got.VirtualGID
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -21,7 +22,32 @@ var (
 	errInvalidHome = errors.New("invalid home directory: must be an absolute path under the configured base, no '..'")
 	// errInvalidPassword 是密码校验失败的统一错误。
 	errInvalidPassword = errors.New("password must be 1..256 chars and contain no control characters")
+	// errInvalidID 是 uid/gid 校验失败的统一错误。
+	errInvalidID = errors.New("virtual_uid/virtual_gid must be a non-privileged numeric id (>=1000) or a service account name")
 )
+
+// minNonPrivilegedID 是允许映射的最小数字 uid/gid。低于此值(尤其 0=root)拒绝,
+// 避免把 FTP 虚拟用户映射到 root 或系统保留账户而越权。
+const minNonPrivilegedID = 1000
+
+// serviceAccountRe 限定按"名字"指定的服务账户:首字符字母,其后字母数字加 . _ -。
+// 解析为具体 uid 留给后端(getpwnam),此处仅挡注入字符;纯数字另走数字校验。
+var serviceAccountRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,31}$`)
+
+// validVirtualID 报告 uid/gid 设置值是否安全:
+//   - 纯数字:必须 >= minNonPrivilegedID(挡 root/系统账户)。
+//   - 非数字:必须是合法服务账户名(交后端解析,绝不含 shell/路径字符)。
+//
+// 空串由调用方(overlay)用默认值兜底,不在此判定。
+func validVirtualID(s string) bool {
+	if s == "" {
+		return false
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n >= minNonPrivilegedID
+	}
+	return serviceAccountRe.MatchString(s)
+}
 
 // validUser 报告 s 是否为安全的 FTP 用户名。
 func validUser(s string) bool { return userRe.MatchString(s) }
