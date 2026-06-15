@@ -72,6 +72,24 @@ func TestActionAuditsRegardlessOfOutcome(t *testing.T) {
 	}
 }
 
+func TestActionFailureMasksRawOutput(t *testing.T) {
+	audited := 0
+	m := New(fakeDeps("admin", &audited))
+	r := chi.NewRouter()
+	m.Routes(r)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/restart?unit=nginx", nil)
+	r.ServeHTTP(rec, req)
+	// In test env systemctl is typically absent, so ServiceAction fails with 500.
+	if rec.Code != http.StatusInternalServerError {
+		t.Skipf("expected systemctl-absent 500, got %d (systemctl present?)", rec.Code)
+	}
+	if got := rec.Body.String(); got != "service operation failed\n" {
+		t.Errorf("failure body must be generic, got %q", got)
+	}
+}
+
 func TestRestartRejectsBadUnit(t *testing.T) {
 	audited := 0
 	m := New(fakeDeps("admin", &audited))

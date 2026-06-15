@@ -77,7 +77,8 @@ func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	m.deps.Audit(&uid, "service."+verb, unit+" "+outcome, clientIP(r))
 	if err != nil {
-		http.Error(w, out, http.StatusInternalServerError)
+		log.Printf("service: %s for %q failed: %v", verb, unit, err)
+		http.Error(w, "service operation failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
