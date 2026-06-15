@@ -87,15 +87,15 @@ func (m *Module) HealthCheck() error {
 }
 
 func (m *Module) Routes(r module.Router) {
-	r.Get("/certs", m.handleList)                  // 只读
-	r.Post("/certs", m.handleIssue)                // 写:签发
-	r.Post("/certs/upload", m.handleUpload)        // 写:上传自定义证书
-	r.Post("/certs/{id}/renew", m.handleRenew)     // 写:手动续期
+	r.Get("/certs", m.handleList)                               // 只读
+	r.Post("/certs", m.handleIssue)                             // 写:签发
+	r.Post("/certs/upload", m.handleUpload)                     // 写:上传自定义证书
+	r.Post("/certs/{id}/renew", m.handleRenew)                  // 写:手动续期
 	r.Post("/certs/{id}/auto/{verb:on|off}", m.handleAutoRenew) // 写:开关自动续期
-	r.Delete("/certs/{id}", m.handleDelete)        // 删除:admin
-	r.Post("/renew-due", m.handleRenewDue)         // 写:批量续期到期证书
-	r.Get("/settings", m.handleGetSettings)        // 读:admin
-	r.Put("/settings", m.handlePutSettings)        // 写:admin
+	r.Delete("/certs/{id}", m.handleDelete)                     // 删除:admin
+	r.Post("/renew-due", m.handleRenewDue)                      // 写:批量续期到期证书
+	r.Get("/settings", m.handleGetSettings)                     // 读:admin
+	r.Put("/settings", m.handlePutSettings)                     // 写:admin
 }
 
 // ---- handlers ----

@@ -36,9 +36,11 @@ func (c *mockController) Action(verb, name string) (string, error) {
 	c.actions = append(c.actions, verb+" "+name)
 	return "ok", nil
 }
-func (c *mockController) Status(name string) (string, error)      { return "RUNNING " + name, nil }
-func (c *mockController) TailLog(name string, _ int, _ bool) (string, error) { return "log " + name, nil }
-func (c *mockController) Available() error                        { return c.avail }
+func (c *mockController) Status(name string) (string, error) { return "RUNNING " + name, nil }
+func (c *mockController) TailLog(name string, _ int, _ bool) (string, error) {
+	return "log " + name, nil
+}
+func (c *mockController) Available() error { return c.avail }
 
 func newTestModule(t *testing.T, role string, ctl Controller) (*Module, *int) {
 	t.Helper()

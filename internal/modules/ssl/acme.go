@@ -48,7 +48,7 @@ type ChallengeType string
 const (
 	ChallengeWebroot    ChallengeType = "webroot"    // HTTP-01,挑战写入 webroot 由 nginx 服务
 	ChallengeStandalone ChallengeType = "standalone" // HTTP-01,CLI 自起临时服务器占 80 端口
-	ChallengeDNS        ChallengeType = "dns"         // DNS-01,需 DNS 插件/手动
+	ChallengeDNS        ChallengeType = "dns"        // DNS-01,需 DNS 插件/手动
 )
 
 func validChallenge(c ChallengeType) bool {

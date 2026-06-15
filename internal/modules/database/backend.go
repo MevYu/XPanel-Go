@@ -50,7 +50,7 @@ func (b *sqlDBBackend) exec(ctx context.Context, q string, args ...any) error {
 }
 
 func (b *sqlDBBackend) ping(ctx context.Context) error { return b.db.PingContext(ctx) }
-func (b *sqlDBBackend) close() error                    { return b.db.Close() }
+func (b *sqlDBBackend) close() error                   { return b.db.Close() }
 
 // mysqlConnector 用设置里的 MySQL 连接信息建连(socket 优先于 host:port)。
 func mysqlConnector(ctx context.Context, s Settings) (sqlBackend, error) {

@@ -26,15 +26,15 @@ func (m *mockSQL) exec(_ context.Context, q string, _ ...any) error {
 	return nil
 }
 func (m *mockSQL) ping(context.Context) error { return nil }
-func (m *mockSQL) close() error                { return nil }
+func (m *mockSQL) close() error               { return nil }
 
 // mockRedis 记录调用。
 type mockRedis struct{ flushed bool }
 
-func (m *mockRedis) info(context.Context) (string, error)   { return "redis_version:7.0\n", nil }
-func (m *mockRedis) dbSize(context.Context) (int64, error)  { return 42, nil }
-func (m *mockRedis) flushDB(context.Context) error          { m.flushed = true; return nil }
-func (m *mockRedis) close() error                           { return nil }
+func (m *mockRedis) info(context.Context) (string, error)  { return "redis_version:7.0\n", nil }
+func (m *mockRedis) dbSize(context.Context) (int64, error) { return 42, nil }
+func (m *mockRedis) flushDB(context.Context) error         { m.flushed = true; return nil }
+func (m *mockRedis) close() error                          { return nil }
 
 func newTestModule(t *testing.T, role string, audited *int) (*Module, *mockSQL, *mockRedis) {
 	t.Helper()

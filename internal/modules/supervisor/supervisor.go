@@ -53,14 +53,14 @@ func (*Module) Stop(context.Context) error  { return nil }
 func (m *Module) HealthCheck() error { return m.ctl.Available() }
 
 func (m *Module) Routes(r module.Router) {
-	r.Get("/programs", m.handleList)                              // 只读
-	r.Post("/programs", m.handleCreate)                           // 写:operator+
-	r.Delete("/programs/{id}", m.handleDelete)                    // 危险写:admin + 确认
-	r.Get("/programs/{id}/status", m.handleStatus)                // 只读
-	r.Get("/programs/{id}/logs", m.handleLogs)                    // 只读
+	r.Get("/programs", m.handleList)                                   // 只读
+	r.Post("/programs", m.handleCreate)                                // 写:operator+
+	r.Delete("/programs/{id}", m.handleDelete)                         // 危险写:admin + 确认
+	r.Get("/programs/{id}/status", m.handleStatus)                     // 只读
+	r.Get("/programs/{id}/logs", m.handleLogs)                         // 只读
 	r.Post("/programs/{id}/{verb:start|stop|restart}", m.handleAction) // 写:operator+(stop 危险)
-	r.Get("/settings", m.handleGetSettings)                       // 只读
-	r.Put("/settings", m.handlePutSettings)                       // 写:admin
+	r.Get("/settings", m.handleGetSettings)                            // 只读
+	r.Put("/settings", m.handlePutSettings)                            // 写:admin
 }
 
 type programRequest struct {

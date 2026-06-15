@@ -13,9 +13,9 @@ type Settings struct {
 	// MySQL/MariaDB 连接
 	MySQLHost     string `json:"mysql_host"`
 	MySQLPort     int    `json:"mysql_port"`
-	MySQLSocket   string `json:"mysql_socket"`    // 非空则优先于 host:port
+	MySQLSocket   string `json:"mysql_socket"` // 非空则优先于 host:port
 	MySQLUser     string `json:"mysql_user"`
-	MySQLPassword string `json:"mysql_password"`  // 写入用;读出时屏蔽为空
+	MySQLPassword string `json:"mysql_password"` // 写入用;读出时屏蔽为空
 	MySQLDataDir  string `json:"mysql_data_dir"`
 
 	// PostgreSQL 连接

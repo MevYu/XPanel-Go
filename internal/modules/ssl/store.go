@@ -14,13 +14,13 @@ type sslStore struct{ db *sql.DB }
 // Cert 是一条证书记录。私钥内容绝不入库;仅记录其落盘路径。
 type Cert struct {
 	ID          int64  `json:"id"`
-	Domains     string `json:"domains"`     // 逗号分隔,Domains[0] 为主域名
-	Issuer      string `json:"issuer"`      // letsencrypt / uploaded 等
-	Challenge   string `json:"challenge"`   // webroot / standalone / dns / upload
-	CertPath    string `json:"cert_path"`   // 全链证书路径
-	KeyPath     string `json:"key_path"`    // 私钥路径(文件 0600)
-	NotAfter    int64  `json:"not_after"`   // 到期 Unix 秒,0 表示未知
-	AutoRenew   bool   `json:"auto_renew"`  // 是否自动续期
+	Domains     string `json:"domains"`    // 逗号分隔,Domains[0] 为主域名
+	Issuer      string `json:"issuer"`     // letsencrypt / uploaded 等
+	Challenge   string `json:"challenge"`  // webroot / standalone / dns / upload
+	CertPath    string `json:"cert_path"`  // 全链证书路径
+	KeyPath     string `json:"key_path"`   // 私钥路径(文件 0600)
+	NotAfter    int64  `json:"not_after"`  // 到期 Unix 秒,0 表示未知
+	AutoRenew   bool   `json:"auto_renew"` // 是否自动续期
 	CreatedBy   *int64 `json:"created_by"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`

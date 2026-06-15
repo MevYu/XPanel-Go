@@ -18,10 +18,16 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/module"
 	"github.com/MevYu/XPanel-Go/internal/modules/cron"
 	"github.com/MevYu/XPanel-Go/internal/modules/dashboard"
+	"github.com/MevYu/XPanel-Go/internal/modules/database"
 	"github.com/MevYu/XPanel-Go/internal/modules/files"
 	"github.com/MevYu/XPanel-Go/internal/modules/firewall"
+	"github.com/MevYu/XPanel-Go/internal/modules/malscan"
 	"github.com/MevYu/XPanel-Go/internal/modules/service"
+	"github.com/MevYu/XPanel-Go/internal/modules/sites"
+	"github.com/MevYu/XPanel-Go/internal/modules/ssl"
+	"github.com/MevYu/XPanel-Go/internal/modules/supervisor"
 	"github.com/MevYu/XPanel-Go/internal/modules/terminal"
+	"github.com/MevYu/XPanel-Go/internal/modules/waf"
 	"github.com/MevYu/XPanel-Go/internal/server"
 	"github.com/MevYu/XPanel-Go/internal/store"
 )
@@ -95,6 +101,30 @@ func main() {
 		log.Fatalf("files module: %v", err)
 	}
 	reg.Register(filesMod)
+	reg.Register(database.New(cfg.JWTSecret, st, database.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(sites.New(st, sites.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(ssl.New(st, nil, ssl.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(supervisor.New(st, supervisor.NewController(), supervisor.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(waf.New(st, waf.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(malscan.New(st, malscan.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		log.Fatalf("module restore: %v", err)
