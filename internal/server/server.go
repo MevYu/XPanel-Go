@@ -71,6 +71,9 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 		return c.UserID, c.Role, nil
 	}
 
+	// 公开模块路由(文件外链、WS-ticket 端点)挂在 RequireAuth 之外,模块自鉴权。
+	module.MountPublic(r, reg, mgr)
+
 	// 模块管理 API 与模块路由都需要登录;模块路由再各自做 RBAC。
 	r.Group(func(r chi.Router) {
 		r.Use(RequireAuth(parse))

@@ -54,7 +54,15 @@ func (*Module) HealthCheck() error { return system.ShellAvailable() }
 
 func (m *Module) Routes(r module.Router) {
 	r.Post("/ticket", m.handleTicket) // 走面板认证:operator+ 换一张短时票据
-	r.Get("/ws", m.handleWS)          // 浏览器 WS:仅凭 ?ticket= 握手
+}
+
+// PublicPrefix 把 WS 端点挂在面板认证之外:浏览器原生 WS 不能带 Authorization 头,
+// WS 仅凭 ?ticket= 自鉴权。
+func (*Module) PublicPrefix() string { return "/api/m/terminal/ws" }
+
+// PublicRoutes 返回 WS handler;MountPublic 在停用模块时已经 enable-gate 成 404。
+func (m *Module) PublicRoutes() http.Handler {
+	return http.HandlerFunc(m.handleWS)
 }
 
 // handleTicket 校验角色后签发短时一次性票据。前端拿到后立即去连 /ws?ticket=。

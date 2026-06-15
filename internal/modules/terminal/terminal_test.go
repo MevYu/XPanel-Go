@@ -63,12 +63,10 @@ func TestTicketIssuedToOperator(t *testing.T) {
 
 func TestWSRejectsBadTicket(t *testing.T) {
 	m := New(fakeDeps("operator", new(int)))
-	r := chi.NewRouter()
-	m.Routes(r)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/ws?ticket=bogus", nil)
-	r.ServeHTTP(rec, req)
+	m.PublicRoutes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("WS with bad ticket must be 401, got %d", rec.Code)
 	}
@@ -76,12 +74,10 @@ func TestWSRejectsBadTicket(t *testing.T) {
 
 func TestWSRejectsMissingTicket(t *testing.T) {
 	m := New(fakeDeps("operator", new(int)))
-	r := chi.NewRouter()
-	m.Routes(r)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/ws", nil)
-	r.ServeHTTP(rec, req)
+	m.PublicRoutes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("WS without ticket must be 401, got %d", rec.Code)
 	}
@@ -90,8 +86,6 @@ func TestWSRejectsMissingTicket(t *testing.T) {
 // 票据一次性:消费后再连必须 401。这里复用 store 直接签发,避免触发真实 WS 升级。
 func TestWSTicketSingleUseAtRoute(t *testing.T) {
 	m := New(fakeDeps("operator", new(int)))
-	r := chi.NewRouter()
-	m.Routes(r)
 
 	tok := m.tickets.issue(1, "operator")
 	if _, ok := m.tickets.consume(tok); !ok {
@@ -99,7 +93,7 @@ func TestWSTicketSingleUseAtRoute(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/ws?ticket="+tok, nil)
-	r.ServeHTTP(rec, req)
+	m.PublicRoutes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("already-consumed ticket must be 401 at /ws, got %d", rec.Code)
 	}

@@ -15,6 +15,9 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/system"
 )
 
+// PublicPrefix 把外链端点挂在 /s 下,面板 RequireAuth 之外。
+func (*Module) PublicPrefix() string { return "/s" }
+
 // PublicRoutes 返回公开外链端点(集成挂在 /s/ 下,面板 RequireAuth 之外)。
 //
 // 权限平面与面板完全隔离:
