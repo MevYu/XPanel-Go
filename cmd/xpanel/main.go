@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/MevYu/XPanel-Go/internal/auth"
@@ -71,8 +74,24 @@ func main() {
 		log.Fatalf("module restore: %v", err)
 	}
 	h := server.NewWithModules(svc, jm, reg, mgr)
+	srv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second, // 防 Slowloris;不设 ReadTimeout/WriteTimeout 以兼容长连接 WS
+		IdleTimeout:       120 * time.Second,
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server: %v", err)
+		}
+	}()
 	fmt.Printf("XPanel %s 监听 http://%s\n", version, cfg.Addr)
-	log.Fatal(http.ListenAndServe(cfg.Addr, h))
+	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
 }
 
 func randomPassword() string {
