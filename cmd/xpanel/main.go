@@ -16,8 +16,12 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/auth"
 	"github.com/MevYu/XPanel-Go/internal/config"
 	"github.com/MevYu/XPanel-Go/internal/module"
+	"github.com/MevYu/XPanel-Go/internal/modules/cron"
 	"github.com/MevYu/XPanel-Go/internal/modules/dashboard"
+	"github.com/MevYu/XPanel-Go/internal/modules/files"
+	"github.com/MevYu/XPanel-Go/internal/modules/firewall"
 	"github.com/MevYu/XPanel-Go/internal/modules/service"
+	"github.com/MevYu/XPanel-Go/internal/modules/terminal"
 	"github.com/MevYu/XPanel-Go/internal/server"
 	"github.com/MevYu/XPanel-Go/internal/store"
 )
@@ -61,14 +65,36 @@ func main() {
 		fmt.Printf("==== XPanel 首次启动 ====\n用户名: admin\n密码: %s\n(请立即登录并修改)\n", pw)
 	}
 
+	auditFn := func(userID *int64, action, detail, ip string) {
+		_ = st.WriteAudit(userID, action, detail, ip)
+	}
+
 	reg := module.NewRegistry()
 	reg.Register(dashboard.New())
 	reg.Register(service.New(service.Deps{
 		Principal: server.PrincipalFromRequest,
-		Audit: func(userID *int64, action, detail, ip string) {
-			_ = st.WriteAudit(userID, action, detail, ip)
-		},
+		Audit:     auditFn,
 	}))
+	reg.Register(cron.New(st, cron.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(firewall.New(firewall.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(terminal.New(terminal.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	filesMod, err := files.New("", st, files.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	})
+	if err != nil {
+		log.Fatalf("files module: %v", err)
+	}
+	reg.Register(filesMod)
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		log.Fatalf("module restore: %v", err)
