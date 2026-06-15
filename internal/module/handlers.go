@@ -1,0 +1,66 @@
+package module
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+// moduleView 是 /api/modules 列表项:元信息 + 当前启用态 + 导航。
+type moduleView struct {
+	ModuleMeta
+	Enabled bool      `json:"enabled"`
+	Nav     []NavItem `json:"nav"`
+}
+
+// ModuleAPI 返回模块管理路由:列表 + 启用/停用。调用方负责在外层套认证/RBAC 中间件。
+func ModuleAPI(reg *Registry, mgr *Manager) http.Handler {
+	r := chi.NewRouter()
+
+	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
+		views := make([]moduleView, 0)
+		for _, m := range reg.All() {
+			views = append(views, moduleView{
+				ModuleMeta: m.Meta(),
+				Enabled:    mgr.IsEnabled(m.Meta().ID),
+				Nav:        m.Nav(),
+			})
+		}
+		writeJSON(w, http.StatusOK, views)
+	})
+
+	r.Post("/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if _, ok := reg.Get(id); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if err := mgr.Enable(id); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	r.Post("/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if _, ok := reg.Get(id); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if err := mgr.Disable(id); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	return r
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
