@@ -39,6 +39,39 @@ func TestRestartRequiresOperator(t *testing.T) {
 	}
 }
 
+func TestRestartReadonlyForbiddenNoAudit(t *testing.T) {
+	audited := 0
+	m := New(fakeDeps("readonly", &audited))
+	r := chi.NewRouter()
+	m.Routes(r)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/restart?unit=nginx", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly restart with valid unit should be 403, got %d", rec.Code)
+	}
+	if audited != 0 {
+		t.Fatalf("forbidden request must not be audited, got audited=%d", audited)
+	}
+}
+
+func TestActionAuditsRegardlessOfOutcome(t *testing.T) {
+	audited := 0
+	m := New(fakeDeps("admin", &audited))
+	r := chi.NewRouter()
+	m.Routes(r)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/restart?unit=nginx", nil)
+	r.ServeHTTP(rec, req)
+	// ServiceAction may fail if systemctl is absent, but audit runs before the
+	// error check, so audited must be 1 regardless of HTTP status.
+	if audited != 1 {
+		t.Fatalf("admin action must audit exactly once, got audited=%d (code=%d)", audited, rec.Code)
+	}
+}
+
 func TestRestartRejectsBadUnit(t *testing.T) {
 	audited := 0
 	m := New(fakeDeps("admin", &audited))

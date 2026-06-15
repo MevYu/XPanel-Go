@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"net"
 	"net/http"
 
@@ -47,13 +48,18 @@ func (m *Module) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid unit name", http.StatusBadRequest)
 		return
 	}
-	out, _ := system.ServiceAction("status", unit)
+	out, err := system.ServiceAction("status", unit)
+	if err != nil {
+		log.Printf("service: status for %q failed: %v", unit, err)
+		http.Error(w, "status unavailable", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(out))
 }
 
 func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
-	_, role := m.deps.Principal(r)
+	uid, role := m.deps.Principal(r)
 	if role != "admin" && role != "operator" {
 		http.Error(w, "forbidden: requires operator role", http.StatusForbidden)
 		return
@@ -65,8 +71,11 @@ func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	verb := chi.URLParamFromCtx(r.Context(), "verb")
 	out, err := system.ServiceAction(verb, unit)
-	uid, _ := m.deps.Principal(r)
-	m.deps.Audit(&uid, "service."+verb, unit, clientIP(r))
+	outcome := "ok"
+	if err != nil {
+		outcome = "failed"
+	}
+	m.deps.Audit(&uid, "service."+verb, unit+" "+outcome, clientIP(r))
 	if err != nil {
 		http.Error(w, out, http.StatusInternalServerError)
 		return
