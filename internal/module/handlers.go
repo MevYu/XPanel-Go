@@ -24,10 +24,18 @@ func ModuleAPI(reg *Registry, mgr *Manager, principal func(*http.Request) (int64
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		views := make([]moduleView, 0)
 		for _, m := range reg.All() {
+			meta := m.Meta()
+			if meta.Requires == nil {
+				meta.Requires = []string{}
+			}
+			nav := m.Nav()
+			if nav == nil {
+				nav = []NavItem{}
+			}
 			views = append(views, moduleView{
-				ModuleMeta: m.Meta(),
-				Enabled:    mgr.IsEnabled(m.Meta().ID),
-				Nav:        m.Nav(),
+				ModuleMeta: meta,
+				Enabled:    mgr.IsEnabled(meta.ID),
+				Nav:        nav,
 			})
 		}
 		writeJSON(w, http.StatusOK, views)

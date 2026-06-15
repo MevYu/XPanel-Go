@@ -79,6 +79,37 @@ func TestEnableRequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestModuleListNeverNullArrays(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	defer st.Close()
+	reg := NewRegistry()
+	// fakeModule 的 requires 为 nil、Nav() 返回 nil:确保序列化为 [] 而非 null。
+	reg.Register(routedModule{fakeModule{id: "svc", requires: nil}})
+	mgr := NewManager(reg, st)
+
+	root := chi.NewRouter()
+	root.Mount("/api/modules", ModuleAPI(reg, mgr, adminPrincipal))
+
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, httptest.NewRequest("GET", "/api/modules", nil))
+	if rec.Code != 200 {
+		t.Fatalf("list status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"requires":[]`) {
+		t.Errorf("requires should be [], body: %q", body)
+	}
+	if strings.Contains(body, `"requires":null`) {
+		t.Errorf("requires must not be null, body: %q", body)
+	}
+	if !strings.Contains(body, `"nav":[]`) {
+		t.Errorf("nav should be [], body: %q", body)
+	}
+	if strings.Contains(body, `"nav":null`) {
+		t.Errorf("nav must not be null, body: %q", body)
+	}
+}
+
 // routedStartStop 把 startStopModule 暴露为带路由的 Module,供 ModuleAPI 挂载。
 type routedStartStop struct{ *startStopModule }
 
