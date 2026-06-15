@@ -9,16 +9,19 @@ import (
 // accessTTL 短时效;撤销靠 refresh token,access 过期即失效。
 const accessTTL = 15 * time.Minute
 
+// Claims 是 access token 的载荷,内嵌标准 RegisteredClaims。
 type Claims struct {
 	UserID int64  `json:"uid"`
 	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
+// JWTManager 用对称密钥签发与校验 HS256 access token。
 type JWTManager struct {
 	secret []byte
 }
 
+// NewJWTManager 返回以 secret 为签名密钥的 JWTManager。
 func NewJWTManager(secret []byte) *JWTManager {
 	return &JWTManager{secret: secret}
 }
