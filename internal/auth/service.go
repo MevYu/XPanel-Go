@@ -69,18 +69,23 @@ func (s *Service) Login(username, password, ip string) (Tokens, error) {
 	return s.issue(u.ID, u.Role)
 }
 
-// Refresh 旋转:校验旧 refresh → 撤销 → 发新对。
+// Refresh 旋转:校验旧 refresh → 原子消费 → 只有赢者发新对。
+// 原子撤销关闭了 SELECT-then-UPDATE 的竞争窗口,防止同一 refresh 并发双花。
 func (s *Service) Refresh(refresh, ip string) (Tokens, error) {
 	rt, err := s.store.GetValidRefreshToken(refresh)
 	if err != nil {
 		return Tokens{}, ErrInvalidCredentials
 	}
+	won, err := s.store.RevokeRefreshTokenIfActive(refresh)
+	if err != nil {
+		return Tokens{}, err
+	}
+	if !won {
+		return Tokens{}, ErrInvalidCredentials
+	}
 	user, err := s.store.GetUserByID(rt.UserID)
 	if err != nil {
 		return Tokens{}, ErrInvalidCredentials
-	}
-	if err := s.store.RevokeRefreshToken(refresh); err != nil {
-		return Tokens{}, err
 	}
 	_ = s.store.WriteAudit(&user.ID, "token.refresh", "", ip)
 	return s.issue(user.ID, user.Role)

@@ -31,6 +31,37 @@ func TestRefreshTokenLifecycle(t *testing.T) {
 	}
 }
 
+func TestRevokeRefreshTokenIfActiveOnce(t *testing.T) {
+	s, _ := Open(":memory:")
+	defer s.Close()
+	u, _ := s.CreateUser("admin", "h", "admin")
+
+	id, _ := s.CreateRefreshToken(u.ID, time.Now().Add(time.Hour).Unix())
+	won, err := s.RevokeRefreshTokenIfActive(id)
+	if err != nil {
+		t.Fatalf("first revoke: %v", err)
+	}
+	if !won {
+		t.Error("first revoke should win")
+	}
+	won, err = s.RevokeRefreshTokenIfActive(id)
+	if err != nil {
+		t.Fatalf("second revoke: %v", err)
+	}
+	if won {
+		t.Error("second revoke on already-revoked token should lose")
+	}
+
+	exp, _ := s.CreateRefreshToken(u.ID, time.Now().Add(-time.Hour).Unix())
+	won, err = s.RevokeRefreshTokenIfActive(exp)
+	if err != nil {
+		t.Fatalf("expired revoke: %v", err)
+	}
+	if won {
+		t.Error("revoke on expired token should lose")
+	}
+}
+
 func TestExpiredRefreshTokenInvalid(t *testing.T) {
 	s, _ := Open(":memory:")
 	defer s.Close()

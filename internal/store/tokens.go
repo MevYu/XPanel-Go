@@ -51,3 +51,17 @@ func (s *Store) RevokeRefreshToken(id string) error {
 	_, err := s.DB.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE id = ?`, id)
 	return err
 }
+
+// RevokeRefreshTokenIfActive 原子地撤销一个未撤销、未过期的 token。
+// 返回 true 表示本次确实由它完成撤销(赢得竞争);false 表示已被撤销/过期/不存在。
+func (s *Store) RevokeRefreshTokenIfActive(id string) (bool, error) {
+	res, err := s.DB.Exec(
+		`UPDATE refresh_tokens SET revoked = 1 WHERE id = ? AND revoked = 0 AND expires_at > ?`,
+		id, time.Now().Unix(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
