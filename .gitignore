@@ -1,0 +1,6 @@
+/xpanel
+*.db
+*.sqlite*
+data/
+*.test
+*.out
