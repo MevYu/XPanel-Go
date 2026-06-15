@@ -39,7 +39,7 @@ func (m *JWTManager) Issue(userID int64, role string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
 }
 
-// Parse 校验签名与过期;只接受 HS256,防 alg=none 降级攻击。
+// Parse 校验签名与过期;只接受 HS256,防 alg=none 与其他 alg 降级攻击。
 func (m *JWTManager) Parse(token string) (*Claims, error) {
 	var claims Claims
 	_, err := jwt.ParseWithClaims(token, &claims, func(t *jwt.Token) (interface{}, error) {
@@ -47,7 +47,7 @@ func (m *JWTManager) Parse(token string) (*Claims, error) {
 			return nil, jwt.ErrSignatureInvalid
 		}
 		return m.secret, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return nil, err
 	}

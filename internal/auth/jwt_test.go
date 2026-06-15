@@ -28,6 +28,18 @@ func TestParseRejectsBadSignature(t *testing.T) {
 	}
 }
 
+func TestParseRejectsHS512(t *testing.T) {
+	secret := []byte("test-secret-32-bytes-long-xxxxxx")
+	claims := Claims{UserID: 1, Role: "admin"}
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS512, claims).SignedString(secret)
+	if err != nil {
+		t.Fatalf("sign HS512 token: %v", err)
+	}
+	if _, err := NewJWTManager(secret).Parse(tok); err == nil {
+		t.Error("HS512 token must be rejected; only HS256 allowed")
+	}
+}
+
 func TestParseRejectsNoneAlg(t *testing.T) {
 	claims := Claims{UserID: 1, Role: "admin"}
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodNone, claims).SignedString(jwt.UnsafeAllowNoneSignatureType)
