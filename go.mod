@@ -3,6 +3,7 @@ module github.com/MevYu/XPanel-Go
 go 1.26.3
 
 require (
+	github.com/go-chi/chi/v5 v5.0.12
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	golang.org/x/crypto v0.21.0
 	modernc.org/sqlite v1.29.5
@@ -10,7 +11,6 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/go-chi/chi/v5 v5.0.12 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/mattn/go-isatty v0.0.16 // indirect

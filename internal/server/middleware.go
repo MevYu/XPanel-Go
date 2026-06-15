@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -68,4 +70,34 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+type ctxKey string
+
+const claimsKey ctxKey = "claims"
+
+// RequireAuth 校验 Bearer token,通过则把 principal 放进 context。
+// 为避免 server 包反向依赖,接受一个 parse 函数。
+func RequireAuth(parse func(token string) (int64, string, error)) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := r.Header.Get("Authorization")
+			if !strings.HasPrefix(h, "Bearer ") {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			uid, role, err := parse(strings.TrimPrefix(h, "Bearer "))
+			if err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			ctx := context.WithValue(r.Context(), claimsKey, principal{uid, role})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+type principal struct {
+	userID int64
+	role   string
 }
