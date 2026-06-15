@@ -39,8 +39,11 @@ func VerifyPassword(encoded, pw string) bool {
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		return false
 	}
-	var mem, time, threads int
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &time, &threads); err != nil {
+	if parts[2] != fmt.Sprintf("v=%d", argon2.Version) {
+		return false
+	}
+	var mem, iterations, threads int
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &iterations, &threads); err != nil {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
@@ -51,6 +54,6 @@ func VerifyPassword(encoded, pw string) bool {
 	if err != nil {
 		return false
 	}
-	got := argon2.IDKey([]byte(pw), salt, uint32(time), uint32(mem), uint8(threads), uint32(len(want)))
+	got := argon2.IDKey([]byte(pw), salt, uint32(iterations), uint32(mem), uint8(threads), uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
