@@ -1,0 +1,169 @@
+package java
+
+import (
+	"database/sql"
+	"time"
+
+	"github.com/MevYu/XPanel-Go/internal/store"
+)
+
+// javaStore 是本模块私有 DB 辅助:自建表存项目元数据与模块设置。
+// 不动中央 migrations,建表幂等。
+type javaStore struct{ db *sql.DB }
+
+// Project 是一个 Java 项目的元数据。真实运行态由进程管理器查询,不存这里。
+type Project struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`          // jar | war | tomcat
+	ArtifactPath string `json:"artifact_path"` // 已校验的 jar/war 绝对路径(基目录内)
+	JavaVersion  string `json:"java_version"`  // 版本标签或 system/空
+	JVMArgs      string `json:"jvm_args"`      // JVM 参数行(已校验,拆数组传 exec)
+	Port         int    `json:"port"`          // 注入 SERVER_PORT 环境变量
+	CreatedBy    *int64 `json:"created_by"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
+}
+
+const createProjectsTable = `CREATE TABLE IF NOT EXISTS java_projects (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	name          TEXT NOT NULL UNIQUE,
+	type          TEXT NOT NULL,
+	artifact_path TEXT NOT NULL,
+	java_version  TEXT NOT NULL DEFAULT '',
+	jvm_args      TEXT NOT NULL DEFAULT '',
+	port          INTEGER NOT NULL,
+	created_by    INTEGER,
+	created_at    INTEGER NOT NULL,
+	updated_at    INTEGER NOT NULL
+)`
+
+const createSettingsTable = `CREATE TABLE IF NOT EXISTS java_settings (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+)`
+
+const (
+	settingBaseDir   = "base_dir"
+	settingJDKDir    = "jdk_dir"
+	settingTomcatDir = "tomcat_dir"
+	settingConfDir   = "conf_dir"
+	settingLogDir    = "log_dir"
+)
+
+// newJavaStore 建表(幂等)并返回辅助。
+func newJavaStore(st *store.Store) (*javaStore, error) {
+	if _, err := st.DB.Exec(createProjectsTable); err != nil {
+		return nil, err
+	}
+	if _, err := st.DB.Exec(createSettingsTable); err != nil {
+		return nil, err
+	}
+	return &javaStore{db: st.DB}, nil
+}
+
+func (s *javaStore) list() ([]Project, error) {
+	rows, err := s.db.Query(`SELECT id, name, type, artifact_path, java_version, jvm_args, port,
+		created_by, created_at, updated_at FROM java_projects ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ps []Project
+	for rows.Next() {
+		p, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		ps = append(ps, p)
+	}
+	return ps, rows.Err()
+}
+
+func (s *javaStore) get(id int64) (Project, error) {
+	row := s.db.QueryRow(`SELECT id, name, type, artifact_path, java_version, jvm_args, port,
+		created_by, created_at, updated_at FROM java_projects WHERE id = ?`, id)
+	return scanProject(row)
+}
+
+func (s *javaStore) create(p Project) (int64, error) {
+	now := time.Now().Unix()
+	res, err := s.db.Exec(`INSERT INTO java_projects
+		(name, type, artifact_path, java_version, jvm_args, port, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Type, p.ArtifactPath, p.JavaVersion, p.JVMArgs, p.Port, p.CreatedBy, now, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *javaStore) delete(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM java_projects WHERE id = ?`, id)
+	return err
+}
+
+// loadSettings 读设置,缺失的 key 回退默认值。
+func (s *javaStore) loadSettings() (Settings, error) {
+	out := DefaultSettings()
+	rows, err := s.db.Query(`SELECT key, value FROM java_settings`)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return out, err
+		}
+		switch k {
+		case settingBaseDir:
+			out.BaseDir = v
+		case settingJDKDir:
+			out.JDKDir = v
+		case settingTomcatDir:
+			out.TomcatDir = v
+		case settingConfDir:
+			out.ConfDir = v
+		case settingLogDir:
+			out.LogDir = v
+		}
+	}
+	return out, rows.Err()
+}
+
+// saveSettings upsert 全部设置 key。
+func (s *javaStore) saveSettings(set Settings) error {
+	const q = `INSERT INTO java_settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+	for _, kv := range [][2]string{
+		{settingBaseDir, set.BaseDir},
+		{settingJDKDir, set.JDKDir},
+		{settingTomcatDir, set.TomcatDir},
+		{settingConfDir, set.ConfDir},
+		{settingLogDir, set.LogDir},
+	} {
+		if _, err := s.db.Exec(q, kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanProject(sc scanner) (Project, error) {
+	var p Project
+	var createdBy sql.NullInt64
+	err := sc.Scan(&p.ID, &p.Name, &p.Type, &p.ArtifactPath, &p.JavaVersion, &p.JVMArgs, &p.Port,
+		&createdBy, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return Project{}, err
+	}
+	if createdBy.Valid {
+		p.CreatedBy = &createdBy.Int64
+	}
+	return p, nil
+}
