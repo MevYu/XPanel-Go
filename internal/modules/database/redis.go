@@ -11,7 +11,9 @@ import (
 // redisBackend 抽象 Redis 只读信息与危险清库操作,便于 mock 测业务。
 type redisBackend interface {
 	info(ctx context.Context) (string, error)
+	infoSection(ctx context.Context, section string) (string, error)
 	dbSize(ctx context.Context) (int64, error)
+	configGet(ctx context.Context, param string) (map[string]string, error)
 	flushDB(ctx context.Context) error
 	close() error
 }
@@ -26,8 +28,16 @@ func (b *goRedisBackend) info(ctx context.Context) (string, error) {
 	return b.c.Info(ctx).Result()
 }
 
+func (b *goRedisBackend) infoSection(ctx context.Context, section string) (string, error) {
+	return b.c.Info(ctx, section).Result()
+}
+
 func (b *goRedisBackend) dbSize(ctx context.Context) (int64, error) {
 	return b.c.DBSize(ctx).Result()
+}
+
+func (b *goRedisBackend) configGet(ctx context.Context, param string) (map[string]string, error) {
+	return b.c.ConfigGet(ctx, param).Result()
 }
 
 func (b *goRedisBackend) flushDB(ctx context.Context) error {

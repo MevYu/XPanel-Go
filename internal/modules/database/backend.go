@@ -15,6 +15,8 @@ import (
 type sqlBackend interface {
 	// query 执行只读查询,逐行回调首列字符串。
 	queryStrings(ctx context.Context, q string, args ...any) ([]string, error)
+	// queryRows 执行只读查询,返回每行的列名→值映射(NULL 映射为空串)。用于带元信息的列表。
+	queryRows(ctx context.Context, q string, args ...any) ([]map[string]string, error)
 	// exec 执行 DDL/DCL,无返回行。
 	exec(ctx context.Context, q string, args ...any) error
 	// ping 测试连通。
@@ -41,6 +43,36 @@ func (b *sqlDBBackend) queryStrings(ctx context.Context, q string, args ...any) 
 			return nil, err
 		}
 		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// queryRows 扫描任意列数的结果集为字符串映射。所有列经 sql.RawBytes/[]byte 取文本,NULL → "".
+func (b *sqlDBBackend) queryRows(ctx context.Context, q string, args ...any) ([]map[string]string, error) {
+	rows, err := b.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	var out []map[string]string
+	for rows.Next() {
+		cells := make([]sql.NullString, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range cells {
+			ptrs[i] = &cells[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		m := make(map[string]string, len(cols))
+		for i, c := range cols {
+			m[c] = cells[i].String // NullString.String 为空当 NULL
+		}
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }

@@ -32,6 +32,12 @@ type Settings struct {
 
 	// 备份目录(列库导出/转储落盘位置)
 	BackupDir string `json:"backup_dir"`
+
+	// 导出/导入工具路径(空则用默认名,经 PATH 解析)。非空须为安全路径。
+	MySQLDumpBin string `json:"mysqldump_bin"`
+	MySQLCLIBin  string `json:"mysql_cli_bin"`
+	PGDumpBin    string `json:"pg_dump_bin"`
+	PGRestoreBin string `json:"pg_restore_bin"`
 }
 
 // defaultSettings 返回各路径/连接的合理默认值。
@@ -72,7 +78,11 @@ const settingsSchema = `CREATE TABLE IF NOT EXISTS database_settings (
 	redis_host      TEXT NOT NULL DEFAULT '',
 	redis_port      INTEGER NOT NULL DEFAULT 0,
 	redis_password  TEXT NOT NULL DEFAULT '',
-	backup_dir      TEXT NOT NULL DEFAULT ''
+	backup_dir      TEXT NOT NULL DEFAULT '',
+	mysqldump_bin   TEXT NOT NULL DEFAULT '',
+	mysql_cli_bin   TEXT NOT NULL DEFAULT '',
+	pg_dump_bin     TEXT NOT NULL DEFAULT '',
+	pg_restore_bin  TEXT NOT NULL DEFAULT ''
 )`
 
 // settingsStore 读写 database_settings 单行,加解密密码列。
@@ -81,9 +91,21 @@ type settingsStore struct {
 	cryp *cryptor
 }
 
+// addColumns 是对已存在表的幂等列补充(老表升级)。CREATE TABLE IF NOT EXISTS 不会改老表结构。
+var addColumns = []string{
+	`ALTER TABLE database_settings ADD COLUMN mysqldump_bin  TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE database_settings ADD COLUMN mysql_cli_bin  TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE database_settings ADD COLUMN pg_dump_bin    TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE database_settings ADD COLUMN pg_restore_bin TEXT NOT NULL DEFAULT ''`,
+}
+
 func newSettingsStore(st *store.Store, cryp *cryptor) (*settingsStore, error) {
 	if _, err := st.DB.Exec(settingsSchema); err != nil {
 		return nil, err
+	}
+	// 幂等补列:列已存在时 ALTER 报错,忽略(SQLite 无 ADD COLUMN IF NOT EXISTS)。
+	for _, stmt := range addColumns {
+		_, _ = st.DB.Exec(stmt)
 	}
 	return &settingsStore{db: st.DB, cryp: cryp}, nil
 }
@@ -94,12 +116,14 @@ func (s *settingsStore) effective() (Settings, error) {
 	var encMySQL, encPG, encRedis string
 	row := s.db.QueryRow(`SELECT mysql_host, mysql_port, mysql_socket, mysql_user, mysql_password, mysql_data_dir,
 		pg_host, pg_port, pg_user, pg_password, pg_data_dir,
-		redis_host, redis_port, redis_password, backup_dir
+		redis_host, redis_port, redis_password, backup_dir,
+		mysqldump_bin, mysql_cli_bin, pg_dump_bin, pg_restore_bin
 		FROM database_settings WHERE id = 1`)
 	var got Settings
 	err := row.Scan(&got.MySQLHost, &got.MySQLPort, &got.MySQLSocket, &got.MySQLUser, &encMySQL, &got.MySQLDataDir,
 		&got.PGHost, &got.PGPort, &got.PGUser, &encPG, &got.PGDataDir,
-		&got.RedisHost, &got.RedisPort, &encRedis, &got.BackupDir)
+		&got.RedisHost, &got.RedisPort, &encRedis, &got.BackupDir,
+		&got.MySQLDumpBin, &got.MySQLCLIBin, &got.PGDumpBin, &got.PGRestoreBin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cur, nil // 未配置 → 默认
 	}
@@ -161,18 +185,22 @@ func (s *settingsStore) save(in Settings) error {
 	_, err = s.db.Exec(`INSERT INTO database_settings
 		(id, mysql_host, mysql_port, mysql_socket, mysql_user, mysql_password, mysql_data_dir,
 		 pg_host, pg_port, pg_user, pg_password, pg_data_dir,
-		 redis_host, redis_port, redis_password, backup_dir)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 redis_host, redis_port, redis_password, backup_dir,
+		 mysqldump_bin, mysql_cli_bin, pg_dump_bin, pg_restore_bin)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 		 mysql_host=excluded.mysql_host, mysql_port=excluded.mysql_port, mysql_socket=excluded.mysql_socket,
 		 mysql_user=excluded.mysql_user, mysql_password=excluded.mysql_password, mysql_data_dir=excluded.mysql_data_dir,
 		 pg_host=excluded.pg_host, pg_port=excluded.pg_port, pg_user=excluded.pg_user,
 		 pg_password=excluded.pg_password, pg_data_dir=excluded.pg_data_dir,
 		 redis_host=excluded.redis_host, redis_port=excluded.redis_port, redis_password=excluded.redis_password,
-		 backup_dir=excluded.backup_dir`,
+		 backup_dir=excluded.backup_dir,
+		 mysqldump_bin=excluded.mysqldump_bin, mysql_cli_bin=excluded.mysql_cli_bin,
+		 pg_dump_bin=excluded.pg_dump_bin, pg_restore_bin=excluded.pg_restore_bin`,
 		in.MySQLHost, in.MySQLPort, in.MySQLSocket, in.MySQLUser, encMySQL, in.MySQLDataDir,
 		in.PGHost, in.PGPort, in.PGUser, encPG, in.PGDataDir,
-		in.RedisHost, in.RedisPort, encRedis, in.BackupDir)
+		in.RedisHost, in.RedisPort, encRedis, in.BackupDir,
+		in.MySQLDumpBin, in.MySQLCLIBin, in.PGDumpBin, in.PGRestoreBin)
 	return err
 }
 
@@ -232,5 +260,17 @@ func overlay(dst *Settings, got Settings) {
 	}
 	if got.BackupDir != "" {
 		dst.BackupDir = got.BackupDir
+	}
+	if got.MySQLDumpBin != "" {
+		dst.MySQLDumpBin = got.MySQLDumpBin
+	}
+	if got.MySQLCLIBin != "" {
+		dst.MySQLCLIBin = got.MySQLCLIBin
+	}
+	if got.PGDumpBin != "" {
+		dst.PGDumpBin = got.PGDumpBin
+	}
+	if got.PGRestoreBin != "" {
+		dst.PGRestoreBin = got.PGRestoreBin
 	}
 }
