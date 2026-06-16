@@ -15,6 +15,7 @@ import (
 // mockRunner 记录调用并返回可控结果,隔离真实 docker CLI。
 type mockRunner struct {
 	calls [][]string
+	stdin []string // 与 calls 平行:对应调用喂入的 stdin(Run 时为空串)
 	out   string
 	err   error
 	avail error
@@ -22,6 +23,12 @@ type mockRunner struct {
 
 func (m *mockRunner) Run(_ context.Context, args ...string) (string, error) {
 	m.calls = append(m.calls, args)
+	m.stdin = append(m.stdin, "")
+	return m.out, m.err
+}
+func (m *mockRunner) RunInput(_ context.Context, stdin string, args ...string) (string, error) {
+	m.calls = append(m.calls, args)
+	m.stdin = append(m.stdin, stdin)
 	return m.out, m.err
 }
 func (m *mockRunner) Available() error { return m.avail }
