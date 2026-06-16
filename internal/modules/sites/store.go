@@ -12,18 +12,32 @@ import (
 // siteStore 是本模块私有 DB 辅助:自建表存站点元数据与设置,不动中央 migrations。
 type siteStore struct{ db *sql.DB }
 
-// Site 是一条站点元数据。Config 为已渲染的 nginx 配置文本(便于查看/编辑回显)。
+// Site 是一条站点元数据 + 全部 aaPanel 级结构化设置。
+// Config 为已渲染的 nginx 配置文本;Domains 为兼容字段(纯域名列表,由 DomainBindings 派生)。
 type Site struct {
-	ID        int64    `json:"id"`
-	Name      string   `json:"name"`
-	Domains   []string `json:"domains"`
-	Kind      string   `json:"kind"`
-	Listen    int      `json:"listen"`
-	Enabled   bool     `json:"enabled"`
-	Config    string   `json:"config"`
-	CreatedBy *int64   `json:"created_by"`
-	CreatedAt int64    `json:"created_at"`
-	UpdatedAt int64    `json:"updated_at"`
+	ID             int64        `json:"id"`
+	Name           string       `json:"name"`
+	Domains        []string     `json:"domains"`
+	DomainBindings []Domain     `json:"domain_bindings"`
+	Kind           string       `json:"kind"` // type: static | php | proxy
+	Listen         int          `json:"listen"`
+	RootDir        string       `json:"root_dir"`
+	PHPVersion     string       `json:"php_version"`
+	IndexDocs      []string     `json:"index_docs"`
+	Enabled        bool         `json:"enabled"`
+	SSL            SSL          `json:"ssl"`
+	RewriteRules   string       `json:"rewrite_rules"`
+	ProxyTarget    string       `json:"proxy_target"`
+	DirProtect     []DirProtect `json:"dir_protect"`
+	Redirects      []Redirect   `json:"redirects"`
+	AntiLeech      AntiLeech    `json:"anti_leech"`
+	AccessLog      string       `json:"access_log"`
+	ErrorLog       string       `json:"error_log"`
+	CustomConfig   string       `json:"custom_config"`
+	Config         string       `json:"config"`
+	CreatedBy      *int64       `json:"created_by"`
+	CreatedAt      int64        `json:"created_at"`
+	UpdatedAt      int64        `json:"updated_at"`
 }
 
 const createSitesTable = `CREATE TABLE IF NOT EXISTS sites (
@@ -54,6 +68,9 @@ func newSiteStore(st *store.Store) (*siteStore, error) {
 	if _, err := st.DB.Exec(createSettingsTable); err != nil {
 		return nil, err
 	}
+	if err := migrateSites(st.DB); err != nil {
+		return nil, err
+	}
 	return &siteStore{db: st.DB}, nil
 }
 
@@ -80,9 +97,13 @@ func (s *siteStore) putSettings(set Settings) error {
 	return err
 }
 
+// siteCols 是 SELECT/scan 共用的全列清单。
+const siteCols = `id, name, domains, kind, listen, enabled, config, created_by, created_at, updated_at,
+	root_dir, php_version, index_docs, ssl, rewrite_rules, proxy_target, dir_protect, redirects,
+	anti_leech, access_log, error_log, custom_config, domain_bindings`
+
 func (s *siteStore) list() ([]Site, error) {
-	rows, err := s.db.Query(`SELECT id, name, domains, kind, listen, enabled, config,
-		created_by, created_at, updated_at FROM sites ORDER BY id`)
+	rows, err := s.db.Query(`SELECT ` + siteCols + ` FROM sites ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -99,30 +120,44 @@ func (s *siteStore) list() ([]Site, error) {
 }
 
 func (s *siteStore) get(id int64) (Site, error) {
-	row := s.db.QueryRow(`SELECT id, name, domains, kind, listen, enabled, config,
-		created_by, created_at, updated_at FROM sites WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT `+siteCols+` FROM sites WHERE id = ?`, id)
 	return scanSite(row)
 }
 
 func (s *siteStore) getByName(name string) (Site, error) {
-	row := s.db.QueryRow(`SELECT id, name, domains, kind, listen, enabled, config,
-		created_by, created_at, updated_at FROM sites WHERE name = ?`, name)
+	row := s.db.QueryRow(`SELECT `+siteCols+` FROM sites WHERE name = ?`, name)
 	return scanSite(row)
 }
 
 func (s *siteStore) create(st Site) (int64, error) {
 	now := time.Now().Unix()
-	domainsJSON, err := json.Marshal(st.Domains)
-	if err != nil {
-		return 0, err
-	}
-	res, err := s.db.Exec(`INSERT INTO sites (name, domains, kind, listen, enabled, config, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		st.Name, string(domainsJSON), st.Kind, st.Listen, boolToInt(st.Enabled), st.Config, st.CreatedBy, now, now)
+	j := st.jsonFields()
+	res, err := s.db.Exec(`INSERT INTO sites
+		(name, domains, kind, listen, enabled, config, created_by, created_at, updated_at,
+		 root_dir, php_version, index_docs, ssl, rewrite_rules, proxy_target, dir_protect, redirects,
+		 anti_leech, access_log, error_log, custom_config, domain_bindings)
+		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?)`,
+		st.Name, j.domains, st.Kind, st.Listen, boolToInt(st.Enabled), st.Config, st.CreatedBy, now, now,
+		st.RootDir, st.PHPVersion, j.indexDocs, j.ssl, st.RewriteRules, st.ProxyTarget, j.dirProtect, j.redirects,
+		j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// update 持久化一条站点的全部可变字段(不含 name/created_*),并刷新 updated_at。
+func (s *siteStore) update(st Site) error {
+	j := st.jsonFields()
+	_, err := s.db.Exec(`UPDATE sites SET
+		domains=?, kind=?, listen=?, enabled=?, config=?, updated_at=?,
+		root_dir=?, php_version=?, index_docs=?, ssl=?, rewrite_rules=?, proxy_target=?,
+		dir_protect=?, redirects=?, anti_leech=?, access_log=?, error_log=?, custom_config=?, domain_bindings=?
+		WHERE id=?`,
+		j.domains, st.Kind, st.Listen, boolToInt(st.Enabled), st.Config, time.Now().Unix(),
+		st.RootDir, st.PHPVersion, j.indexDocs, j.ssl, st.RewriteRules, st.ProxyTarget,
+		j.dirProtect, j.redirects, j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, st.ID)
+	return err
 }
 
 func (s *siteStore) setEnabled(id int64, enabled bool) error {
@@ -149,10 +184,12 @@ type scanner interface {
 func scanSite(sc scanner) (Site, error) {
 	var st Site
 	var enabled int
-	var domainsJSON string
 	var createdBy sql.NullInt64
+	var domainsJSON, indexDocsJSON, sslJSON, dirProtectJSON, redirectsJSON, antiLeechJSON, bindingsJSON string
 	err := sc.Scan(&st.ID, &st.Name, &domainsJSON, &st.Kind, &st.Listen, &enabled,
-		&st.Config, &createdBy, &st.CreatedAt, &st.UpdatedAt)
+		&st.Config, &createdBy, &st.CreatedAt, &st.UpdatedAt,
+		&st.RootDir, &st.PHPVersion, &indexDocsJSON, &sslJSON, &st.RewriteRules, &st.ProxyTarget,
+		&dirProtectJSON, &redirectsJSON, &antiLeechJSON, &st.AccessLog, &st.ErrorLog, &st.CustomConfig, &bindingsJSON)
 	if err != nil {
 		return Site{}, err
 	}
@@ -160,10 +197,52 @@ func scanSite(sc scanner) (Site, error) {
 	if createdBy.Valid {
 		st.CreatedBy = &createdBy.Int64
 	}
-	if err := json.Unmarshal([]byte(domainsJSON), &st.Domains); err != nil {
-		return Site{}, err
+	for _, u := range []struct {
+		raw string
+		dst any
+	}{
+		{domainsJSON, &st.Domains},
+		{indexDocsJSON, &st.IndexDocs},
+		{sslJSON, &st.SSL},
+		{dirProtectJSON, &st.DirProtect},
+		{redirectsJSON, &st.Redirects},
+		{antiLeechJSON, &st.AntiLeech},
+		{bindingsJSON, &st.DomainBindings},
+	} {
+		if u.raw == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(u.raw), u.dst); err != nil {
+			return Site{}, err
+		}
 	}
 	return st, nil
+}
+
+// siteJSON 是一条站点 JSON 列的序列化结果。
+type siteJSON struct {
+	domains, indexDocs, ssl, dirProtect, redirects, antiLeech, domainBindings string
+}
+
+func (st Site) jsonFields() siteJSON {
+	return siteJSON{
+		domains:        mustJSON(st.Domains),
+		indexDocs:      mustJSON(st.IndexDocs),
+		ssl:            mustJSON(st.SSL),
+		dirProtect:     mustJSON(st.DirProtect),
+		redirects:      mustJSON(st.Redirects),
+		antiLeech:      mustJSON(st.AntiLeech),
+		domainBindings: mustJSON(st.DomainBindings),
+	}
+}
+
+// mustJSON 序列化;切片 nil 归一为 [] 便于列默认值与回显一致。错误仅在不可序列化类型时发生(不会)。
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "null"
+	}
+	return string(b)
 }
 
 func boolToInt(b bool) int {

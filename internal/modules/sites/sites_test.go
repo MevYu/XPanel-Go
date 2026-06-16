@@ -13,10 +13,22 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// testSettings 是单测用的默认建站设置。
+func testSettings() Settings {
+	return Settings{
+		WebRoot:   "/www/wwwroot",
+		ConfDir:   "/etc/nginx/conf.d",
+		LogDir:    "/www/wwwlogs",
+		PHPSocket: "/run/php/php-fpm.sock",
+	}
+}
+
 // mockNginx 记录调用顺序与配置内容,可模拟 nginx -t 失败。
 type mockNginx struct {
 	configs   map[string]string
-	testErr   error // 非 nil 时 Test() 失败
+	htpasswds map[string]string
+	logs      map[string]string // path -> content
+	testErr   error             // 非 nil 时 Test() 失败
 	reloadErr error
 	reloads   int
 	tests     int
@@ -24,7 +36,9 @@ type mockNginx struct {
 	removes   int
 }
 
-func newMockNginx() *mockNginx { return &mockNginx{configs: map[string]string{}} }
+func newMockNginx() *mockNginx {
+	return &mockNginx{configs: map[string]string{}, htpasswds: map[string]string{}, logs: map[string]string{}}
+}
 
 func (n *mockNginx) WriteConfig(name, content string) error {
 	n.writes++
@@ -45,6 +59,23 @@ func (n *mockNginx) Reload() error {
 	return n.reloadErr
 }
 func (n *mockNginx) Available() error { return nil }
+func (n *mockNginx) WriteHtpasswd(name, content string) error {
+	n.htpasswds[name] = content
+	return nil
+}
+func (n *mockNginx) RemoveHtpasswd(name string) error {
+	delete(n.htpasswds, name)
+	return nil
+}
+func (n *mockNginx) ReadLog(path string, tail int) (string, error) {
+	return lastLines(n.logs[path], tail), nil
+}
+func (n *mockNginx) WriteCert(name, cert, key string) (string, string, error) {
+	cp := "/etc/nginx/conf.d/ssl/" + name + "/fullchain.pem"
+	kp := "/etc/nginx/conf.d/ssl/" + name + "/privkey.pem"
+	n.configs["cert:"+name] = cert
+	return cp, kp, nil
+}
 
 func newTestModule(t *testing.T, role string, ng *mockNginx) (*Module, *int) {
 	t.Helper()
