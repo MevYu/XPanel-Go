@@ -2,6 +2,7 @@ package module
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/MevYu/XPanel-Go/internal/store"
@@ -11,11 +12,18 @@ type startStopModule struct {
 	fakeModule
 	started   bool
 	healthErr error
+	startErr  error
 }
 
-func (m *startStopModule) Start(Context) error { m.started = true; return nil }
-func (m *startStopModule) Stop(Context) error  { m.started = false; return nil }
-func (m *startStopModule) HealthCheck() error  { return m.healthErr }
+func (m *startStopModule) Start(Context) error {
+	if m.startErr != nil {
+		return m.startErr
+	}
+	m.started = true
+	return nil
+}
+func (m *startStopModule) Stop(Context) error { m.started = false; return nil }
+func (m *startStopModule) HealthCheck() error { return m.healthErr }
 
 func newManager(t *testing.T, mods ...Module) (*Manager, *store.Store) {
 	t.Helper()
@@ -54,11 +62,38 @@ func TestEnableFailsHealthCheck(t *testing.T) {
 	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, healthErr: errors.New("systemctl missing")}
 	mgr, st := newManager(t, m)
 	defer st.Close()
-	if err := mgr.Enable("svc"); err == nil {
-		t.Error("Enable should fail when HealthCheck fails")
+	err := mgr.Enable("svc")
+	if err == nil {
+		t.Fatal("Enable should fail when HealthCheck fails")
+	}
+	// HealthCheck 失败原因对用户可见、可操作 → 必须是 ValidationError 且携带原文。
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("HealthCheck failure should be a *ValidationError, got %T: %v", err, err)
+	}
+	if !strings.Contains(ve.Msg, "systemctl missing") {
+		t.Errorf("HealthCheck reason should be carried in message, got %q", ve.Msg)
 	}
 	if mgr.IsEnabled("svc") {
 		t.Error("module must not be enabled after failed health check")
+	}
+}
+
+func TestEnableStartFailureNotValidationError(t *testing.T) {
+	// Start 失败是真正的内部错误,不得包成 ValidationError(否则会被 handler 放给前端)。
+	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, startErr: errors.New("/secret start boom")}
+	mgr, st := newManager(t, m)
+	defer st.Close()
+	err := mgr.Enable("svc")
+	if err == nil {
+		t.Fatal("Enable should fail when Start fails")
+	}
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		t.Errorf("Start failure must not be a *ValidationError, got %q", ve.Msg)
+	}
+	if mgr.IsEnabled("svc") {
+		t.Error("module must not be enabled after failed start")
 	}
 }
 

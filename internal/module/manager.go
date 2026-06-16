@@ -50,7 +50,8 @@ func (mgr *Manager) Enable(id string) error {
 		}
 	}
 	if err := m.HealthCheck(); err != nil {
-		return fmt.Errorf("module %q health check failed: %w", id, err)
+		// HealthCheck 失败原因(缺 nginx/docker 连不上等)对用户可见、可操作,非内部敏感信息 → 放给前端。
+		return &ValidationError{Msg: fmt.Sprintf("模块 %q 依赖不满足: %v", id, err)}
 	}
 	if err := m.Start(context.Background()); err != nil {
 		return fmt.Errorf("module %q start failed: %w", id, err)

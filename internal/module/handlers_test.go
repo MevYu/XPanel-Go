@@ -143,10 +143,37 @@ func TestDisableValidationErrorShown(t *testing.T) {
 }
 
 func TestEnableInternalErrorMasked(t *testing.T) {
+	// Start 失败是真正的内部错误,仍须屏蔽成通用文案(不泄漏内部路径)。
 	st, _ := store.Open(":memory:")
 	defer st.Close()
 	reg := NewRegistry()
-	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, healthErr: errors.New("/secret/path missing")}
+	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, startErr: errors.New("/secret/path missing")}
+	reg.Register(routedStartStop{m})
+	mgr := NewManager(reg, st)
+
+	root := chi.NewRouter()
+	root.Mount("/api/modules", ModuleAPI(reg, mgr, adminPrincipal))
+
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/svc/enable", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("enable start failure should 409, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "/secret/path") {
+		t.Errorf("internal error leaked to client: %q", body)
+	}
+	if !strings.Contains(body, "module operation failed") {
+		t.Errorf("expected generic message, got: %q", body)
+	}
+}
+
+func TestEnableHealthCheckReasonShown(t *testing.T) {
+	// HealthCheck 失败原因(缺依赖软件)对用户可见、可操作 → 必须回到前端,而非通用文案。
+	st, _ := store.Open(":memory:")
+	defer st.Close()
+	reg := NewRegistry()
+	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, healthErr: errors.New("nginx not found")}
 	reg.Register(routedStartStop{m})
 	mgr := NewManager(reg, st)
 
@@ -159,10 +186,10 @@ func TestEnableInternalErrorMasked(t *testing.T) {
 		t.Fatalf("enable health-check failure should 409, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "/secret/path") {
-		t.Errorf("internal error leaked to client: %q", body)
+	if !strings.Contains(body, "nginx not found") {
+		t.Errorf("HealthCheck reason should be shown to user, body: %q", body)
 	}
-	if !strings.Contains(body, "module operation failed") {
-		t.Errorf("expected generic message, got: %q", body)
+	if strings.Contains(body, "module operation failed") {
+		t.Errorf("HealthCheck failure must not be masked, body: %q", body)
 	}
 }
