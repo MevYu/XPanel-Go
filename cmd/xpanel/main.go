@@ -202,6 +202,10 @@ func main() {
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
 	}))
+	registerOptionalModules(reg, st, optionalDeps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	})
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		log.Fatalf("module restore: %v", err)
