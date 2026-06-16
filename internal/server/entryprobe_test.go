@@ -61,7 +61,7 @@ func TestEntryProbeWindowExpiry(t *testing.T) {
 func TestEntryGateProbeHook(t *testing.T) {
 	var probes []string
 	clientIP := func(r *http.Request) string { return ExtractClientIP(r, nil) }
-	gate := EntryGate("/secret", func(r *http.Request) { probes = append(probes, clientIP(r)) })
+	gate := EntryGate("/secret", nil, func(r *http.Request) { probes = append(probes, clientIP(r)) })
 	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
 
 	cases := []struct {
@@ -93,12 +93,98 @@ func TestEntryGateProbeHook(t *testing.T) {
 	}
 }
 
+// 嵌入 FS 中真实存在的静态文件(favicon 等)被 EntryGate 放行,不计探测。
+func TestEntryGateServesStaticFileNoProbe(t *testing.T) {
+	exists := map[string]bool{"/favicon.svg": true, "/assets/app-abc.js": true}
+	fileExists := func(p string) bool { return exists[p] }
+
+	var probes int
+	var served []string
+	gate := EntryGate("/secret", fileExists, func(r *http.Request) { probes++ })
+	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = append(served, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, p := range []string{"/favicon.svg", "/assets/app-abc.js"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", p, nil)
+		req.RemoteAddr = "8.8.8.8:1111"
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: want 200 (served), got %d", p, rec.Code)
+		}
+	}
+	if probes != 0 {
+		t.Fatalf("static files must not count as probes, got %d", probes)
+	}
+	if len(served) != 2 {
+		t.Fatalf("both static files should reach handler, got %v", served)
+	}
+
+	// 不存在的随机路径仍 404 + 计探测(扫描防护不削弱)。
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/nope.svg", nil)
+	req.RemoteAddr = "8.8.8.8:1111"
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown path want 404, got %d", rec.Code)
+	}
+	if probes != 1 {
+		t.Fatalf("unknown path must count as probe, got %d", probes)
+	}
+}
+
+// 已认证(有效 Bearer)的请求命中未知路径不计探测,避免登录用户自封。
+func TestProbeSkipsAuthedRequest(t *testing.T) {
+	parse := func(token string) (int64, string, error) {
+		if token == "good" {
+			return 1, "admin", nil
+		}
+		return 0, "", errBadToken
+	}
+	var probes int
+	onProbe := func(req *http.Request) {
+		if hasValidBearer(req, parse) {
+			return
+		}
+		probes++
+	}
+	gate := EntryGate("/secret", nil, onProbe)
+	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	authed := httptest.NewRequest("GET", "/unknown", nil)
+	authed.Header.Set("Authorization", "Bearer good")
+	h.ServeHTTP(httptest.NewRecorder(), authed)
+	if probes != 0 {
+		t.Fatalf("authed request must not count as probe, got %d", probes)
+	}
+
+	// 无效 token / 未认证仍计探测。
+	for _, tok := range []string{"", "Bearer bad"} {
+		req := httptest.NewRequest("GET", "/unknown", nil)
+		if tok != "" {
+			req.Header.Set("Authorization", tok)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	if probes != 2 {
+		t.Fatalf("unauthenticated/invalid must count, want 2 probes, got %d", probes)
+	}
+}
+
+var errBadToken = &probeTestErr{}
+
+type probeTestErr struct{}
+
+func (*probeTestErr) Error() string { return "bad token" }
+
 // 受信代理场景:探测计数用 XFF 中的真实客户端 IP。
 func TestEntryGateProbeUsesTrustedXFF(t *testing.T) {
 	trusted := mustNets(t, "10.0.0.0/8")
 	var probes []string
 	clientIP := func(r *http.Request) string { return ExtractClientIP(r, trusted) }
-	gate := EntryGate("/secret", func(r *http.Request) { probes = append(probes, clientIP(r)) })
+	gate := EntryGate("/secret", nil, func(r *http.Request) { probes = append(probes, clientIP(r)) })
 	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	req := httptest.NewRequest("GET", "/scan", nil)

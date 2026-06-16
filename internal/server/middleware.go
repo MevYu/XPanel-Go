@@ -96,14 +96,16 @@ func IPBanMiddleware(banned func(ip string) bool, clientIP func(*http.Request) s
 }
 
 // EntryGate 隐藏面板入口:非白名单前缀且不在 entryPath 下的请求一律 404(不暴露面板)。
-// 白名单:/api/* (含认证)、/s/*(公开模块)、/healthz、/assets/*(静态资源)。
+// 白名单:/api/* (含认证)、/s/*(公开模块)、/healthz、/assets/*(静态资源),
+// 以及 fileExists 报告为嵌入 FS 中真实存在文件的路径(如 /favicon.svg、/robots.txt)。
 // entryPath 及其子路径放行给 SPA handler。
+// fileExists(非 nil 时)放行真实静态文件,使正常用户加载页面资源不被 404/计探测。
 // onProbe(非 nil 时)在每次 404(入口探测命中)时以请求为参回调,用于探测计数/封禁。
-func EntryGate(entryPath string, onProbe func(*http.Request)) func(http.Handler) http.Handler {
+func EntryGate(entryPath string, fileExists func(string) bool, onProbe func(*http.Request)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p := r.URL.Path
-			if isAllowedPrefix(p) || underEntry(p, entryPath) {
+			if isAllowedPrefix(p) || underEntry(p, entryPath) || (fileExists != nil && fileExists(p)) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -223,6 +225,17 @@ func RequireAuth(parse func(token string) (int64, string, error)) func(http.Hand
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// hasValidBearer 报告请求是否携带可被 parse 成功解析的 Bearer token。
+// 用于探测计数排除:已登录用户命中未知路径不算入口探测,避免正常用户自封。
+func hasValidBearer(r *http.Request, parse func(token string) (int64, string, error)) bool {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, "Bearer ") {
+		return false
+	}
+	_, _, err := parse(strings.TrimPrefix(h, "Bearer "))
+	return err == nil
 }
 
 type principal struct {

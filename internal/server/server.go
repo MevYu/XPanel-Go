@@ -63,11 +63,26 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 	if ipBanned != nil {
 		r.Use(IPBanMiddleware(ipBanned, clientIP)) // 最前面:被封 IP 的全部请求直接拒
 	}
+	parse := func(token string) (int64, string, error) {
+		c, err := jwt.Parse(token)
+		if err != nil {
+			return 0, "", err
+		}
+		return c.UserID, c.Role, nil
+	}
+
 	var onProbe func(*http.Request)
 	if probe != nil {
-		onProbe = func(req *http.Request) { probe.Probe(clientIP(req)) }
+		// 带有效 Bearer token 的请求是已登录用户,命中未知路径不计探测(不自封)。
+		onProbe = func(req *http.Request) {
+			if hasValidBearer(req, parse) {
+				return
+			}
+			probe.Probe(clientIP(req))
+		}
 	}
-	r.Use(EntryGate(entryPath, onProbe)) // IPBanMiddleware 之后:未封 IP 记探测、超阈值触发封禁
+	// webui.FileExists 放行嵌入 FS 中真实存在的静态文件(favicon 等),它们不进 404/探测分支。
+	r.Use(EntryGate(entryPath, webui.FileExists, onProbe)) // IPBanMiddleware 之后:未封 IP 记探测、超阈值触发封禁
 	r.Use(SecurityHeaders)
 	r.Use(NewRateLimiterWithClientIP(60, clientIP).Middleware)
 
@@ -82,14 +97,6 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 		r.Post("/refresh", ah.refresh)
 		r.Post("/logout", ah.logout)
 	})
-
-	parse := func(token string) (int64, string, error) {
-		c, err := jwt.Parse(token)
-		if err != nil {
-			return 0, "", err
-		}
-		return c.UserID, c.Role, nil
-	}
 
 	// 公开模块路由(文件外链、WS-ticket 端点)挂在 RequireAuth 之外,模块自鉴权。
 	module.MountPublic(r, reg, mgr)

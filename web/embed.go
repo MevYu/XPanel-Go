@@ -15,6 +15,34 @@ import (
 //go:embed all:dist
 var distFS embed.FS
 
+// distSub 是 dist 子树(embed 保证存在),由 FileExists 与 handler 共享。
+var distSub = mustSub()
+
+func mustSub() fs.FS {
+	sub, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		panic(err) // embed guarantees dist exists; failure means a broken build
+	}
+	return sub
+}
+
+// FileExists 报告请求路径 p 是否对应嵌入 FS 中一个真实存在的文件(非目录)。
+// 供 EntryGate 放行真实静态资源(如 /favicon.svg、/assets/*),避免它们被误判为
+// 入口探测而 404。根 index.html(p 清理后为空)不算具名静态文件,返回 false。
+func FileExists(p string) bool {
+	p = strings.TrimPrefix(path.Clean(p), "/")
+	if p == "" {
+		return false
+	}
+	f, err := distSub.Open(p)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	return err == nil && !st.IsDir()
+}
+
 // Handler serves embedded static files; any path not matching a file falls
 // back to index.html so the SPA can do client-side routing.
 func Handler() http.Handler {
@@ -27,10 +55,7 @@ func Handler() http.Handler {
 // window.__XPANEL_BASE__ script injected before </head> so the frontend can
 // set its React Router basename to entryPath.
 func HandlerWithBase(entryPath string) http.Handler {
-	sub, err := fs.Sub(distFS, "dist")
-	if err != nil {
-		panic(err) // embed guarantees dist exists; failure means a broken build
-	}
+	sub := distSub
 	rawIndex, err := fs.ReadFile(sub, "index.html")
 	if err != nil {
 		panic(err)

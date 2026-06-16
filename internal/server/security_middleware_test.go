@@ -37,7 +37,7 @@ func TestIPBanMiddlewareRejectsBannedIP(t *testing.T) {
 func TestEntryGate(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	const entry = "/abc123def456"
-	h := EntryGate(entry, nil)(ok)
+	h := EntryGate(entry, nil, nil)(ok)
 
 	pass := []string{
 		entry, entry + "/", entry + "/dashboard",
