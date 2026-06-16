@@ -576,6 +576,35 @@ func (m *Module) handleLogDownload(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, rc)
 }
 
+// handlePutRoot 设置站点根为 web 根下的绝对路径(区别于 run-dir 的相对子目录)。
+func (m *Module) handlePutRoot(w http.ResponseWriter, r *http.Request) {
+	site, ok := m.loadForWrite(w, r)
+	if !ok {
+		return
+	}
+	if site.Kind == string(KindProxy) {
+		http.Error(w, "proxy site has no root dir", http.StatusConflict)
+		return
+	}
+	var req struct {
+		RootDir string `json:"root_dir"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	set, ok := m.loadSettings(w)
+	if !ok {
+		return
+	}
+	root, err := safeAbsUnder(set.WebRoot, req.RootDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	site.RootDir = root
+	m.applySite(w, r, site, "sites.root.update", site.Name+" -> "+root)
+}
+
 // --- run dir ---
 
 func (m *Module) handleGetRunDir(w http.ResponseWriter, r *http.Request) {

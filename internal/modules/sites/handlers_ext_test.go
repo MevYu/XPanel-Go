@@ -426,6 +426,36 @@ func TestRunDirSet(t *testing.T) {
 	}
 }
 
+func TestPutRoot(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedSite(t, m)
+	// valid absolute under web root
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/root", map[string]string{"root_dir": "/www/wwwroot/example.com/public"}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put root = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !contains(ng.configs["example.com"], "root /www/wwwroot/example.com/public;") {
+		t.Errorf("root not applied\n%s", ng.configs["example.com"])
+	}
+	// outside web root
+	rec = do(m, "PUT", "/sites/"+itoa(id)+"/root", map[string]string{"root_dir": "/etc/passwd"}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("outside web root should 400, got %d", rec.Code)
+	}
+	// traversal
+	rec = do(m, "PUT", "/sites/"+itoa(id)+"/root", map[string]string{"root_dir": "/www/wwwroot/../etc"}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("traversal should 400, got %d", rec.Code)
+	}
+	// proxy site → 409
+	pid := seedProxy(t, m)
+	rec = do(m, "PUT", "/sites/"+itoa(pid)+"/root", map[string]string{"root_dir": "/www/wwwroot/api.example.com"}, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("proxy root should 409, got %d", rec.Code)
+	}
+}
+
 func TestExtSettingsRequireWriter(t *testing.T) {
 	ng := newMockNginx()
 	m, _ := newTestModule(t, "readonly", ng)

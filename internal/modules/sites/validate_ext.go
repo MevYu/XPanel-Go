@@ -2,6 +2,7 @@ package sites
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -174,6 +175,27 @@ func validSendHost(s string) bool {
 		return true
 	}
 	return validDomain(strings.ToLower(s))
+}
+
+// safeAbsUnder 校验一个绝对路径必须落在 base 目录内。
+// 拒绝相对路径、.. 穿越、空白/元字符。返回 filepath.Clean 后的路径。
+func safeAbsUnder(base, p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if !strings.HasPrefix(p, "/") {
+		return "", fmt.Errorf("path %q must be absolute", p)
+	}
+	if strings.Contains(p, "..") {
+		return "", fmt.Errorf("path %q must not contain ..", p)
+	}
+	if strings.ContainsAny(p, " \t\n\r;{}$*?\"'`\\") {
+		return "", fmt.Errorf("path %q contains forbidden characters", p)
+	}
+	base = filepath.Clean(base)
+	cleaned := filepath.Clean(p)
+	if cleaned != base && !strings.HasPrefix(cleaned, base+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes web root", p)
+	}
+	return cleaned, nil
 }
 
 // validDomainBinding 校验一条域名+端口绑定。port 0 视为默认(80)。
