@@ -24,6 +24,9 @@ import (
 // 命令扇出超时上限:防 admin 设过大值拖住 controller。
 const maxTimeoutSec = 600
 
+// 扇出并发上限:防大舰队一次 job 打满 NATS 连接/文件描述符。
+const fanOutConcurrency = 64
+
 // Deps 注入宿主能力,与其它模块一致。
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string)
@@ -130,7 +133,7 @@ func (m *Module) handleApproveNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid node id", http.StatusBadRequest)
 		return
 	}
-	if err := m.ss.approveNode(id); err != nil {
+	if err := m.ctl.approveNode(id); err != nil {
 		log.Printf("fleet: approve node: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -149,7 +152,7 @@ func (m *Module) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid node id", http.StatusBadRequest)
 		return
 	}
-	if err := m.ss.deleteNode(id); err != nil {
+	if err := m.ctl.deleteNode(id); err != nil {
 		log.Printf("fleet: delete node: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -238,9 +241,11 @@ func (m *Module) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 func (m *Module) fanOut(jobID int64, argv []string, timeoutSec int, targets []string) {
 	timeout := time.Duration(timeoutSec) * time.Second
 	done := make(chan struct{}, len(targets))
+	sem := make(chan struct{}, fanOutConcurrency)
 	for _, nodeID := range targets {
 		go func(nodeID string) {
-			defer func() { done <- struct{}{} }()
+			sem <- struct{}{}
+			defer func() { <-sem; done <- struct{}{} }()
 			rep, ok := m.ctl.dispatch(nodeID, cmdMsg{JobID: jobID, Argv: argv, TimeoutSec: timeoutSec}, timeout)
 			if !ok {
 				return // 未回复:留作 pending,稍后统一标 timeout
