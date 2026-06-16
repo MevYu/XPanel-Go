@@ -144,3 +144,68 @@ func TestACMEIssueValidation(t *testing.T) {
 		t.Fatalf("readonly should 403, got %d", rec.Code)
 	}
 }
+
+func TestCertDueForRenewal(t *testing.T) {
+	now := time.Now().Unix()
+	if !certDueForRenewal(now+10*86400, now) {
+		t.Error("expiry in 10 days should be due")
+	}
+	if certDueForRenewal(now+60*86400, now) {
+		t.Error("expiry in 60 days should NOT be due")
+	}
+	if certDueForRenewal(0, now) {
+		t.Error("zero expiry should NOT be due")
+	}
+}
+
+func TestRenewDueCertsReissuesAndSkips(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+
+	now := time.Now().Unix()
+	dueID := seedSite(t, m)
+	due, _ := m.ss.get(dueID)
+	due.SSL = SSL{Enabled: true, CertPath: "/x/c.pem", KeyPath: "/x/k.pem",
+		ACMEEmail: "a@b.com", ACMEDomains: []string{"example.com"}, ExpiresAt: now + 10*86400}
+	if err := m.ss.update(due); err != nil {
+		t.Fatal(err)
+	}
+
+	freshCert, freshKey, freshNA := selfSignedPEM(t, "example.com", 60*24*time.Hour)
+	mi := &mockIssuer{certPEM: freshCert, keyPEM: freshKey}
+	m.newIssuer = func() acmeIssuer { return mi }
+
+	m.renewDueCerts(context.Background())
+
+	if mi.calls != 1 {
+		t.Fatalf("due cert must be reissued once, got %d calls", mi.calls)
+	}
+	updated, _ := m.ss.get(dueID)
+	if updated.SSL.ExpiresAt != freshNA {
+		t.Errorf("expires_at not advanced: %d want %d", updated.SSL.ExpiresAt, freshNA)
+	}
+	if ng.reloads == 0 {
+		t.Error("renewal must reload nginx")
+	}
+}
+
+func TestRenewDueCertsSkipsFarFuture(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+
+	now := time.Now().Unix()
+	id := seedSite(t, m)
+	s, _ := m.ss.get(id)
+	s.SSL = SSL{Enabled: true, ACMEEmail: "a@b.com", ACMEDomains: []string{"example.com"}, ExpiresAt: now + 60*86400}
+	if err := m.ss.update(s); err != nil {
+		t.Fatal(err)
+	}
+
+	mi := &mockIssuer{}
+	m.newIssuer = func() acmeIssuer { return mi }
+	m.renewDueCerts(context.Background())
+
+	if mi.calls != 0 {
+		t.Errorf("cert 60 days out must NOT be reissued, got %d calls", mi.calls)
+	}
+}

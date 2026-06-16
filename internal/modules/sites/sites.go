@@ -41,6 +41,7 @@ type Module struct {
 	newNginx  func(confDir string) Nginx
 	newIssuer func() acmeIssuer
 	available func() error
+	stopCh    chan struct{}
 }
 
 // New 建表并返回模块。建表失败直接 panic(模块无法工作)。
@@ -67,8 +68,21 @@ func (*Module) Nav() []module.NavItem {
 	return []module.NavItem{{Label: "网站", Icon: "globe", Path: "/sites"}}
 }
 
-func (*Module) Start(context.Context) error { return nil }
-func (*Module) Stop(context.Context) error  { return nil }
+// Start 起每日续期巡检 goroutine。Manager 持锁调用,必须立即返回:仅起 detached 循环。
+func (m *Module) Start(context.Context) error {
+	m.stopCh = make(chan struct{})
+	go m.renewLoop(m.stopCh)
+	return nil
+}
+
+// Stop 关停续期巡检。
+func (m *Module) Stop(context.Context) error {
+	if m.stopCh != nil {
+		close(m.stopCh)
+		m.stopCh = nil
+	}
+	return nil
+}
 
 // HealthCheck:nginx 不在 PATH 则不允许启用。
 func (m *Module) HealthCheck() error { return m.available() }
