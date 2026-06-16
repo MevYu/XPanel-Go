@@ -377,6 +377,37 @@ func TestLogsTail(t *testing.T) {
 	}
 }
 
+func TestPutLogConfigDisablesAccessLog(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedSite(t, m)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/logs", map[string]bool{"enabled": false}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put log config = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !contains(ng.configs["example.com"], "access_log off;") {
+		t.Errorf("config missing access_log off;\n%s", ng.configs["example.com"])
+	}
+}
+
+func TestLogDownload(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedSite(t, m)
+	st := getSite(t, m, id)
+	ng.logs[st.AccessLog] = "line1\nline2\n"
+	rec := do(m, "GET", "/sites/"+itoa(id)+"/logs/access/download", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("log download = %d", rec.Code)
+	}
+	if rec.Body.String() != "line1\nline2\n" {
+		t.Errorf("download body = %q", rec.Body.String())
+	}
+	if cd := rec.Header().Get("Content-Disposition"); cd == "" || !contains(cd, "example.com.access.log") {
+		t.Errorf("missing Content-Disposition: %q", cd)
+	}
+}
+
 func TestRunDirSet(t *testing.T) {
 	ng := newMockNginx()
 	m, _ := newTestModule(t, "operator", ng)

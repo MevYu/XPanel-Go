@@ -2,6 +2,7 @@ package sites
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,9 @@ type Nginx interface {
 	RemoveHtpasswd(name string) error
 	// ReadLog 读取日志文件末尾 tail 行。path 必须是受控的绝对日志路径。
 	ReadLog(path string, tail int) (string, error)
+	// OpenLog 打开整个日志文件供流式下载。path 必须是受控的绝对日志路径。
+	// 文件不存在返回 (nil, nil),调用方据此当作空内容处理。调用方负责 Close。
+	OpenLog(path string) (io.ReadCloser, error)
 	// WriteCert 把上传的证书/私钥 PEM 写到 confDir/ssl/<name>/,返回两文件绝对路径。
 	WriteCert(name, certPEM, keyPEM string) (certPath, keyPath string, err error)
 }
@@ -103,6 +107,18 @@ func (n *realNginx) ReadLog(path string, tail int) (string, error) {
 		return "", err
 	}
 	return lastLines(string(b), tail), nil
+}
+
+// OpenLog 打开日志文件供流式下载。不存在返回 (nil, nil)。
+func (n *realNginx) OpenLog(path string) (io.ReadCloser, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return f, nil
 }
 
 func (n *realNginx) WriteCert(name, certPEM, keyPEM string) (string, string, error) {

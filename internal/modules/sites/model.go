@@ -91,6 +91,7 @@ type SiteConfig struct {
 	CustomConfig string       // 追加的原始指令(经注入校验)
 	AccessLog    string       // 访问日志绝对路径
 	ErrorLog     string       // 错误日志绝对路径
+	LogEnabled   bool         // 关闭时输出 access_log off; 不写 access_log 路径
 	HtpasswdDir  string       // .htpasswd 写入目录(confDir 同级),渲染 auth_basic_user_file 用
 }
 

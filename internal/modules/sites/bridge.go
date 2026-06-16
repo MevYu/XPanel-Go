@@ -44,6 +44,7 @@ func siteToConfig(st Site, set Settings) (SiteConfig, error) {
 		CustomConfig: st.CustomConfig,
 		AccessLog:    st.AccessLog,
 		ErrorLog:     st.ErrorLog,
+		LogEnabled:   st.LogEnabled,
 		HtpasswdDir:  htpasswdDir(set),
 	}
 	if cfg.Kind == KindPHP {

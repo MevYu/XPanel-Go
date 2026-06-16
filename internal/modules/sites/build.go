@@ -69,6 +69,7 @@ func buildSite(req createRequest, set Settings) (Site, error) {
 		DomainBindings: bindings,
 		Listen:         listen,
 		Enabled:        true,
+		LogEnabled:     true,
 		AccessLog:      filepath.Join(set.LogDir, name+".access.log"),
 		ErrorLog:       filepath.Join(set.LogDir, name+".error.log"),
 		IndexDocs:      defaultIndexDocs(),

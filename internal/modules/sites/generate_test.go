@@ -7,13 +7,14 @@ import (
 
 func baseStatic() SiteConfig {
 	return SiteConfig{
-		Name:      "example.com",
-		Domains:   []Domain{{"example.com", 80}, {"www.example.com", 80}},
-		Kind:      KindStatic,
-		Root:      "/www/wwwroot/example.com",
-		IndexDocs: []string{"index.html", "index.htm"},
-		AccessLog: "/www/wwwlogs/example.com.access.log",
-		ErrorLog:  "/www/wwwlogs/example.com.error.log",
+		Name:       "example.com",
+		Domains:    []Domain{{"example.com", 80}, {"www.example.com", 80}},
+		Kind:       KindStatic,
+		Root:       "/www/wwwroot/example.com",
+		IndexDocs:  []string{"index.html", "index.htm"},
+		LogEnabled: true,
+		AccessLog:  "/www/wwwlogs/example.com.access.log",
+		ErrorLog:   "/www/wwwlogs/example.com.error.log",
 	}
 }
 

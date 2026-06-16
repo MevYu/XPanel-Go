@@ -35,6 +35,7 @@ type Site struct {
 	AntiLeech      AntiLeech    `json:"anti_leech"`
 	AccessLog      string       `json:"access_log"`
 	ErrorLog       string       `json:"error_log"`
+	LogEnabled     bool         `json:"log_enabled"`
 	CustomConfig   string       `json:"custom_config"`
 	Config         string       `json:"config"`
 	CreatedBy      *int64       `json:"created_by"`
@@ -102,7 +103,7 @@ func (s *siteStore) putSettings(set Settings) error {
 // siteCols 是 SELECT/scan 共用的全列清单。
 const siteCols = `id, name, domains, kind, listen, enabled, config, created_by, created_at, updated_at,
 	root_dir, php_version, index_docs, ssl, rewrite_rules, proxy_target, dir_protect, redirects,
-	anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits`
+	anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits, log_enabled`
 
 func (s *siteStore) list() ([]Site, error) {
 	rows, err := s.db.Query(`SELECT ` + siteCols + ` FROM sites ORDER BY id`)
@@ -137,11 +138,11 @@ func (s *siteStore) create(st Site) (int64, error) {
 	res, err := s.db.Exec(`INSERT INTO sites
 		(name, domains, kind, listen, enabled, config, created_by, created_at, updated_at,
 		 root_dir, php_version, index_docs, ssl, rewrite_rules, proxy_target, dir_protect, redirects,
-		 anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits)
-		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?)`,
+		 anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits, log_enabled)
+		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?)`,
 		st.Name, j.domains, st.Kind, st.Listen, boolToInt(st.Enabled), st.Config, st.CreatedBy, now, now,
 		st.RootDir, st.PHPVersion, j.indexDocs, j.ssl, st.RewriteRules, st.ProxyTarget, j.dirProtect, j.redirects,
-		j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits)
+		j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits, boolToInt(st.LogEnabled))
 	if err != nil {
 		return 0, err
 	}
@@ -154,11 +155,11 @@ func (s *siteStore) update(st Site) error {
 	_, err := s.db.Exec(`UPDATE sites SET
 		domains=?, kind=?, listen=?, enabled=?, config=?, updated_at=?,
 		root_dir=?, php_version=?, index_docs=?, ssl=?, rewrite_rules=?, proxy_target=?,
-		dir_protect=?, redirects=?, anti_leech=?, access_log=?, error_log=?, custom_config=?, domain_bindings=?, proxy_config=?, limits=?
+		dir_protect=?, redirects=?, anti_leech=?, access_log=?, error_log=?, custom_config=?, domain_bindings=?, proxy_config=?, limits=?, log_enabled=?
 		WHERE id=?`,
 		j.domains, st.Kind, st.Listen, boolToInt(st.Enabled), st.Config, time.Now().Unix(),
 		st.RootDir, st.PHPVersion, j.indexDocs, j.ssl, st.RewriteRules, st.ProxyTarget,
-		j.dirProtect, j.redirects, j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits, st.ID)
+		j.dirProtect, j.redirects, j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits, boolToInt(st.LogEnabled), st.ID)
 	return err
 }
 
@@ -185,17 +186,18 @@ type scanner interface {
 
 func scanSite(sc scanner) (Site, error) {
 	var st Site
-	var enabled int
+	var enabled, logEnabled int
 	var createdBy sql.NullInt64
 	var domainsJSON, indexDocsJSON, sslJSON, dirProtectJSON, redirectsJSON, antiLeechJSON, bindingsJSON, proxyJSON, limitsJSON string
 	err := sc.Scan(&st.ID, &st.Name, &domainsJSON, &st.Kind, &st.Listen, &enabled,
 		&st.Config, &createdBy, &st.CreatedAt, &st.UpdatedAt,
 		&st.RootDir, &st.PHPVersion, &indexDocsJSON, &sslJSON, &st.RewriteRules, &st.ProxyTarget,
-		&dirProtectJSON, &redirectsJSON, &antiLeechJSON, &st.AccessLog, &st.ErrorLog, &st.CustomConfig, &bindingsJSON, &proxyJSON, &limitsJSON)
+		&dirProtectJSON, &redirectsJSON, &antiLeechJSON, &st.AccessLog, &st.ErrorLog, &st.CustomConfig, &bindingsJSON, &proxyJSON, &limitsJSON, &logEnabled)
 	if err != nil {
 		return Site{}, err
 	}
 	st.Enabled = enabled != 0
+	st.LogEnabled = logEnabled != 0
 	if createdBy.Valid {
 		st.CreatedBy = &createdBy.Int64
 	}

@@ -2,9 +2,12 @@ package sites
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // 各站点设置子端点。写入(PUT/POST/DELETE)统一 operator+,经 applySite 重生成→nginx -t→reload。
@@ -524,6 +527,53 @@ func (m *Module) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"type": orDefault(logType, "access"), "tail": tail, "content": content})
+}
+
+// handlePutLogConfig 开关站点访问日志。
+func (m *Module) handlePutLogConfig(w http.ResponseWriter, r *http.Request) {
+	site, ok := m.loadForWrite(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	site.LogEnabled = req.Enabled
+	m.applySite(w, r, site, "sites.logs.config", site.Name)
+}
+
+// handleLogDownload 流式下载站点的 access/error 日志。路径取自持久化字段,绝不接受用户路径。
+func (m *Module) handleLogDownload(w http.ResponseWriter, r *http.Request) {
+	site, ok := m.loadSite(w, r)
+	if !ok {
+		return
+	}
+	kind := chi.URLParamFromCtx(r.Context(), "kind")
+	path := site.AccessLog
+	if kind == "error" {
+		path = site.ErrorLog
+	}
+	set, ok := m.loadSettings(w)
+	if !ok {
+		return
+	}
+	ng := m.newNginx(set.ConfDir)
+	rc, err := ng.OpenLog(path)
+	if err != nil {
+		http.Error(w, "log open failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+site.Name+"."+kind+`.log"`)
+	w.WriteHeader(http.StatusOK)
+	if rc == nil {
+		return
+	}
+	defer rc.Close()
+	_, _ = io.Copy(w, rc)
 }
 
 // --- run dir ---

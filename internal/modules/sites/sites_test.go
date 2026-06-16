@@ -3,6 +3,7 @@ package sites
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -69,6 +70,9 @@ func (n *mockNginx) RemoveHtpasswd(name string) error {
 }
 func (n *mockNginx) ReadLog(path string, tail int) (string, error) {
 	return lastLines(n.logs[path], tail), nil
+}
+func (n *mockNginx) OpenLog(path string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(n.logs[path])), nil
 }
 func (n *mockNginx) WriteCert(name, cert, key string) (string, string, error) {
 	cp := "/etc/nginx/conf.d/ssl/" + name + "/fullchain.pem"

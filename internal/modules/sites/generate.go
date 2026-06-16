@@ -70,12 +70,7 @@ func writeServerOpen(b *strings.Builder, port int, domains []Domain, c SiteConfi
 	b.WriteString("server {\n")
 	fmt.Fprintf(b, "    listen %d;\n", port)
 	fmt.Fprintf(b, "    server_name%s;\n", domainNames(domains))
-	if c.AccessLog != "" {
-		fmt.Fprintf(b, "    access_log %s;\n", c.AccessLog)
-	}
-	if c.ErrorLog != "" {
-		fmt.Fprintf(b, "    error_log %s;\n", c.ErrorLog)
-	}
+	writeLogDirectives(b, c)
 }
 
 // writeServerOpenTLS 写 443 ssl server 块开头(含证书与可选 HSTS)。
@@ -90,7 +85,15 @@ func writeServerOpenTLS(b *strings.Builder, c SiteConfig) {
 	if c.SSL.HSTS {
 		b.WriteString("    add_header Strict-Transport-Security \"max-age=31536000\" always;\n")
 	}
-	if c.AccessLog != "" {
+	writeLogDirectives(b, c)
+}
+
+// writeLogDirectives 写 access_log/error_log。LogEnabled 关闭则输出 access_log off;
+// 并省略 access_log 路径;error_log 始终输出(便于排障)。
+func writeLogDirectives(b *strings.Builder, c SiteConfig) {
+	if !c.LogEnabled {
+		b.WriteString("    access_log off;\n")
+	} else if c.AccessLog != "" {
 		fmt.Fprintf(b, "    access_log %s;\n", c.AccessLog)
 	}
 	if c.ErrorLog != "" {

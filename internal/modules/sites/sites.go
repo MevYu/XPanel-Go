@@ -108,6 +108,8 @@ func (m *Module) Routes(r module.Router) {
 	r.Put("/sites/{id}/ssl", m.handlePutSSL)
 
 	r.Get("/sites/{id}/logs", m.handleLogs)
+	r.Put("/sites/{id}/logs", m.handlePutLogConfig)
+	r.Get("/sites/{id}/logs/{kind:access|error}/download", m.handleLogDownload)
 	r.Get("/sites/{id}/run-dir", m.handleGetRunDir)
 	r.Put("/sites/{id}/run-dir", m.handlePutRunDir)
 
