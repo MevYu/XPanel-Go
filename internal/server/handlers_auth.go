@@ -17,6 +17,15 @@ type authHandlers struct {
 	totp loginTOTPVerifier
 	// clientIP 提取真实客户端 IP(受信代理感知),供锁定/封禁/审计统一取 IP。
 	clientIP func(*http.Request) string
+	// loginCookie 为已登录态 cookie 签发/校验器;nil 表示不种 cookie(如基础 server.New)。
+	loginCookie *loginCookie
+}
+
+// setLoginCookie 在真正签发 token 时种登录态 cookie(loginCookie 为 nil 时无操作)。
+func (a *authHandlers) setLoginCookie(w http.ResponseWriter, r *http.Request, uid int64) {
+	if a.loginCookie != nil {
+		a.loginCookie.set(w, r, uid)
+	}
 }
 
 type loginReq struct {
@@ -61,6 +70,7 @@ func (a *authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	a.setLoginCookie(w, r, tok.UserID)
 	writeJSON(w, http.StatusOK, tokenResp{tok.Access, tok.Refresh})
 }
 
@@ -80,6 +90,7 @@ func (a *authHandlers) refresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	a.setLoginCookie(w, r, tok.UserID) // 续期登录态 cookie
 	writeJSON(w, http.StatusOK, tokenResp{tok.Access, tok.Refresh})
 }
 
@@ -92,6 +103,9 @@ func (a *authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 	ip := a.clientIP(r)
 	// 忽略错误:logout 幂等,且不泄露 token 是否存在。
 	_ = a.svc.Logout(req.Refresh, ip)
+	if a.loginCookie != nil {
+		a.loginCookie.clear(w, r)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

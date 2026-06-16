@@ -280,7 +280,7 @@ func main() {
 		banGuard.Ban,
 		time.Now,
 	)
-	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath(), probeGuard)
+	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath(), probeGuard, secret)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,

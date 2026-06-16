@@ -57,8 +57,9 @@ type LoginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err er
 // trusted 为受信反代网段(来自 config.TrustedProxies);空=只信 RemoteAddr、忽略 XFF。
 // entryPath 为隐藏面板入口路径;SPA 只在此路径下提供,其余非 API/静态请求返回 404。
 // probe 守卫(非 nil 时)记录入口探测命中,超阈值经其内部封禁该 IP。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard) http.Handler {
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard, loginSecret []byte) http.Handler {
 	clientIP := clientIPFunc(trusted)
+	login := newLoginCookie(loginSecret)
 	r := chi.NewRouter()
 	if ipBanned != nil {
 		r.Use(IPBanMiddleware(ipBanned, clientIP)) // 最前面:被封 IP 的全部请求直接拒
@@ -81,8 +82,13 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 			probe.Probe(clientIP(req))
 		}
 	}
+	// 有效登录态 cookie → 已登录用户(浏览器刷新/跳转不带 Bearer),302 回入口首页而非 404。
+	loggedIn := func(req *http.Request) bool {
+		_, ok := login.verify(req)
+		return ok
+	}
 	// webui.FileExists 放行嵌入 FS 中真实存在的静态文件(favicon 等),它们不进 404/探测分支。
-	r.Use(EntryGate(entryPath, webui.FileExists, onProbe)) // IPBanMiddleware 之后:未封 IP 记探测、超阈值触发封禁
+	r.Use(EntryGate(entryPath, webui.FileExists, loggedIn, onProbe)) // IPBanMiddleware 之后:未封 IP 记探测、超阈值触发封禁
 	r.Use(SecurityHeaders)
 	r.Use(NewRateLimiterWithClientIP(60, clientIP).Middleware)
 
@@ -91,7 +97,7 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	ah := &authHandlers{svc: svc, totp: loginTOTPVerifier(totp), clientIP: clientIP}
+	ah := &authHandlers{svc: svc, totp: loginTOTPVerifier(totp), clientIP: clientIP, loginCookie: login}
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/login", ah.login)
 		r.Post("/refresh", ah.refresh)

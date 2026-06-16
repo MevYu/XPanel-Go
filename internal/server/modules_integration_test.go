@@ -27,7 +27,7 @@ func TestDashboardMountedAndAlwaysOn(t *testing.T) {
 		t.Fatalf("Restore: %v", err)
 	}
 
-	h := NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/", nil)
+	h := NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/", nil, []byte("test-secret-32-bytes-long-xxxxxx"))
 
 	// 模块路由在 RequireAuth 组内,需带 Bearer token。
 	token, err := jm.Issue(1, "admin")
@@ -73,7 +73,7 @@ func publicTestEnv(t *testing.T) http.Handler {
 	if err := mgr.Enable("terminal"); err != nil {
 		t.Fatalf("enable terminal: %v", err)
 	}
-	return NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/", nil)
+	return NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/", nil, []byte("test-secret-32-bytes-long-xxxxxx"))
 }
 
 // 文件外链在无 Authorization 头下应到达模块 handler(404,不存在的 token),而非被 RequireAuth 拦成 401。
@@ -122,7 +122,7 @@ func TestPublicRouteGatedWhenDisabled(t *testing.T) {
 		t.Fatalf("Restore: %v", err)
 	}
 	// terminal 未启用:公开 WS 路由应被 enable-gate 成 404。
-	h := NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/", nil)
+	h := NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/", nil, []byte("test-secret-32-bytes-long-xxxxxx"))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/m/terminal/ws?ticket=x", nil)

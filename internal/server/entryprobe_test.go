@@ -61,7 +61,7 @@ func TestEntryProbeWindowExpiry(t *testing.T) {
 func TestEntryGateProbeHook(t *testing.T) {
 	var probes []string
 	clientIP := func(r *http.Request) string { return ExtractClientIP(r, nil) }
-	gate := EntryGate("/secret", nil, func(r *http.Request) { probes = append(probes, clientIP(r)) })
+	gate := EntryGate("/secret", nil, nil, func(r *http.Request) { probes = append(probes, clientIP(r)) })
 	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
 
 	cases := []struct {
@@ -100,7 +100,7 @@ func TestEntryGateServesStaticFileNoProbe(t *testing.T) {
 
 	var probes int
 	var served []string
-	gate := EntryGate("/secret", fileExists, func(r *http.Request) { probes++ })
+	gate := EntryGate("/secret", fileExists, nil, func(r *http.Request) { probes++ })
 	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		served = append(served, r.URL.Path)
 		w.WriteHeader(http.StatusOK)
@@ -150,7 +150,7 @@ func TestProbeSkipsAuthedRequest(t *testing.T) {
 		}
 		probes++
 	}
-	gate := EntryGate("/secret", nil, onProbe)
+	gate := EntryGate("/secret", nil, nil, onProbe)
 	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	authed := httptest.NewRequest("GET", "/unknown", nil)
@@ -184,7 +184,7 @@ func TestEntryGateProbeUsesTrustedXFF(t *testing.T) {
 	trusted := mustNets(t, "10.0.0.0/8")
 	var probes []string
 	clientIP := func(r *http.Request) string { return ExtractClientIP(r, trusted) }
-	gate := EntryGate("/secret", nil, func(r *http.Request) { probes = append(probes, clientIP(r)) })
+	gate := EntryGate("/secret", nil, nil, func(r *http.Request) { probes = append(probes, clientIP(r)) })
 	h := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	req := httptest.NewRequest("GET", "/scan", nil)

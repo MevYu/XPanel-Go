@@ -100,13 +100,24 @@ func IPBanMiddleware(banned func(ip string) bool, clientIP func(*http.Request) s
 // 以及 fileExists 报告为嵌入 FS 中真实存在文件的路径(如 /favicon.svg、/robots.txt)。
 // entryPath 及其子路径放行给 SPA handler。
 // fileExists(非 nil 时)放行真实静态文件,使正常用户加载页面资源不被 404/计探测。
+// loggedIn(非 nil 时)报告请求是否携带有效登录态 cookie:命中未知路径的已登录用户
+// 302 重定向回入口首页(entryPath+"/"),不计探测、不封禁。
 // onProbe(非 nil 时)在每次 404(入口探测命中)时以请求为参回调,用于探测计数/封禁。
-func EntryGate(entryPath string, fileExists func(string) bool, onProbe func(*http.Request)) func(http.Handler) http.Handler {
+func EntryGate(entryPath string, fileExists func(string) bool, loggedIn func(*http.Request) bool, onProbe func(*http.Request)) func(http.Handler) http.Handler {
+	redirectTo := entryPath + "/"
+	if entryPath == "/" {
+		redirectTo = "/"
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p := r.URL.Path
 			if isAllowedPrefix(p) || underEntry(p, entryPath) || (fileExists != nil && fileExists(p)) {
 				next.ServeHTTP(w, r)
+				return
+			}
+			// 已登录用户(浏览器跳转/刷新带 SameSite=Lax cookie)回入口首页,不算扫描探测。
+			if loggedIn != nil && loggedIn(r) {
+				http.Redirect(w, r, redirectTo, http.StatusFound)
 				return
 			}
 			if onProbe != nil {

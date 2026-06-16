@@ -24,6 +24,7 @@ var dummyHash = sync.OnceValue(func() string {
 type Tokens struct {
 	Access  string
 	Refresh string
+	UserID  int64 // 签发该对的用户 ID;供调用方种登录态 cookie,不进 JSON 响应。
 }
 
 type Service struct {
@@ -140,5 +141,5 @@ func (s *Service) IssueFor(userID int64, role string) (Tokens, error) {
 	if err != nil {
 		return Tokens{}, err
 	}
-	return Tokens{Access: access, Refresh: refresh}, nil
+	return Tokens{Access: access, Refresh: refresh, UserID: userID}, nil
 }

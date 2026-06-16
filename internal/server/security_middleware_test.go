@@ -37,7 +37,7 @@ func TestIPBanMiddlewareRejectsBannedIP(t *testing.T) {
 func TestEntryGate(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	const entry = "/abc123def456"
-	h := EntryGate(entry, nil, nil)(ok)
+	h := EntryGate(entry, nil, nil, nil)(ok)
 
 	pass := []string{
 		entry, entry + "/", entry + "/dashboard",
@@ -81,7 +81,7 @@ func TestLoginFailuresBanIPAcrossAllEndpoints(t *testing.T) {
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, "/", nil)
+	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, "/", nil, []byte("test-secret-32-bytes-long-xxxxxx"))
 
 	login := func() int {
 		rec := httptest.NewRecorder()
@@ -132,7 +132,7 @@ func TestEntryProbeBansScannerAcrossAllEndpoints(t *testing.T) {
 
 	const entry = "/abc123def456"
 	probe := NewEntryProbeGuard(3, time.Hour, guard.Ban, time.Now)
-	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, entry, probe)
+	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, entry, probe, []byte("test-secret-32-bytes-long-xxxxxx"))
 
 	scanner := "6.6.6.6"
 	hit := func(path string) int {
