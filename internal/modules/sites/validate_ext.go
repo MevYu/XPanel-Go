@@ -2,6 +2,7 @@ package sites
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -147,6 +148,32 @@ func validCertPath(p string) error {
 		return fmt.Errorf("path %q contains forbidden characters", p)
 	}
 	return nil
+}
+
+// proxyHeaderNameRe 限定 proxy_set_header 头名:HTTP token 子集(字母数字与连字符)。
+var proxyHeaderNameRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
+// validProxyHeaderName 校验 proxy_set_header 头名。
+func validProxyHeaderName(s string) bool { return proxyHeaderNameRe.MatchString(s) }
+
+// validProxyHeaderValue 校验头值:非空、限长、无换行与 nginx 元字符。
+func validProxyHeaderValue(s string) error {
+	if s == "" || len(s) > 1024 {
+		return fmt.Errorf("proxy header value empty or too long")
+	}
+	if strings.ContainsAny(s, "\n\r;{}") {
+		return fmt.Errorf("proxy header value contains forbidden characters")
+	}
+	return nil
+}
+
+// validSendHost 校验 proxy_set_header Host 的值:空、$host、$proxy_host 或合法域名。
+func validSendHost(s string) bool {
+	switch s {
+	case "", "$host", "$proxy_host":
+		return true
+	}
+	return validDomain(strings.ToLower(s))
 }
 
 // validDomainBinding 校验一条域名+端口绑定。port 0 视为默认(80)。

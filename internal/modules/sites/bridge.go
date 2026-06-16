@@ -34,6 +34,7 @@ func siteToConfig(st Site, set Settings) (SiteConfig, error) {
 		PHPVersion:   st.PHPVersion,
 		IndexDocs:    st.IndexDocs,
 		Upstream:     st.ProxyTarget,
+		Proxy:        st.Proxy,
 		RewriteRules: st.RewriteRules,
 		SSL:          st.SSL,
 		DirProtect:   st.DirProtect,

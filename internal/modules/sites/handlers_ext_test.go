@@ -122,6 +122,63 @@ func TestPutProxy(t *testing.T) {
 	}
 }
 
+func TestPutProxyMultiUpstreamWebSocketCacheHeaders(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedProxy(t, m)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/proxy", map[string]any{
+		"upstreams":   []string{"http://10.0.0.1:8080", "http://10.0.0.2:8080"},
+		"websocket":   true,
+		"cache":       true,
+		"cache_time":  60,
+		"set_headers": []ProxyHeader{{Name: "X-Custom", Value: "yes"}},
+		"send_host":   "$proxy_host",
+	}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put proxy multi = %d (%s)", rec.Code, rec.Body.String())
+	}
+	cfg := ng.configs["api.example.com"]
+	for _, want := range []string{
+		"upstream xpanel_api.example.com {",
+		"server 10.0.0.1:8080;",
+		"server 10.0.0.2:8080;",
+		"proxy_pass http://xpanel_api.example.com;",
+		"proxy_set_header Upgrade $http_upgrade;",
+		"proxy_cache_valid 200 60s;",
+		"proxy_set_header X-Custom yes;",
+		"proxy_set_header Host $proxy_host;",
+	} {
+		if !contains(cfg, want) {
+			t.Errorf("config missing %q\n%s", want, cfg)
+		}
+	}
+}
+
+func TestPutProxyInvalidHeaderName(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedProxy(t, m)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/proxy", map[string]any{
+		"proxy_target": "http://10.0.0.5:8080",
+		"set_headers":  []ProxyHeader{{Name: "Bad Header", Value: "x"}},
+	}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid header name should 400, got %d", rec.Code)
+	}
+}
+
+func TestPutProxyInvalidUpstream(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedProxy(t, m)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/proxy", map[string]any{
+		"upstreams": []string{"ftp://evil:21"},
+	}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid upstream should 400, got %d", rec.Code)
+	}
+}
+
 func TestPutDomains(t *testing.T) {
 	ng := newMockNginx()
 	m, _ := newTestModule(t, "operator", ng)

@@ -48,6 +48,22 @@ type AntiLeech struct {
 	AllowedReferers []string `json:"allowed_referers"` // 允许的 referer 主机
 }
 
+// ProxyHeader 是一条注入到上游请求的 proxy_set_header。
+type ProxyHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// ProxyConfig 是反向代理的进阶设置(多上游负载均衡、缓存、自定义头、WebSocket)。
+type ProxyConfig struct {
+	Upstreams  []string      `json:"upstreams"`   // 每项 scheme://host:port,经 validUpstream,最多 32
+	Cache      bool          `json:"cache"`       // 开启 proxy_cache_valid
+	CacheTime  int           `json:"cache_time"`  // 秒,1..2592000,Cache 时必填
+	SetHeaders []ProxyHeader `json:"set_headers"` // 最多 32
+	WebSocket  bool          `json:"websocket"`   // 开启 Upgrade/Connection 头
+	SendHost   string        `json:"send_host"`   // "" | "$host" | "$proxy_host" | 合法域名
+}
+
 // SiteConfig 是一个站点的全部结构化设置,渲染器据此组合完整 server block。
 // 字段对应 sites 表的扩展列。零值即"未设置"。
 type SiteConfig struct {
@@ -59,6 +75,7 @@ type SiteConfig struct {
 	PHPSocket    string       // 由 PHPVersion 解析出的 fastcgi sock 路径
 	IndexDocs    []string     // 默认文档,如 [index.php index.html]
 	Upstream     string       // proxy 目标 scheme://host:port
+	Proxy        ProxyConfig  // 反代进阶设置(多上游/缓存/头/WebSocket)
 	RewriteRules string       // 伪静态(原始 nginx rewrite 指令,经注入校验)
 	SSL          SSL          // TLS
 	DirProtect   []DirProtect // 目录保护

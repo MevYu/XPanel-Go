@@ -21,7 +21,13 @@ func generateConfig(c SiteConfig) (string, error) {
 	var b strings.Builder
 	b.WriteString("# Managed by XPanel sites module. Do not edit by hand.\n")
 
-	if c.Kind == KindProxy && c.Upstream != "" {
+	if c.Kind == KindProxy && len(c.Proxy.Upstreams) > 1 {
+		fmt.Fprintf(&b, "upstream xpanel_%s {\n", c.Name)
+		for _, up := range c.Proxy.Upstreams {
+			fmt.Fprintf(&b, "    server %s;\n", trimScheme(up))
+		}
+		b.WriteString("}\n")
+	} else if c.Kind == KindProxy && c.Upstream != "" {
 		fmt.Fprintf(&b, "upstream xpanel_%s {\n    server %s;\n}\n", c.Name, trimScheme(c.Upstream))
 	}
 
@@ -106,11 +112,30 @@ func writeServerBody(b *strings.Builder, c SiteConfig) {
 	switch c.Kind {
 	case KindProxy:
 		b.WriteString("\n    location / {\n")
-		fmt.Fprintf(b, "        proxy_pass %s;\n", c.Upstream)
-		b.WriteString("        proxy_set_header Host $host;\n")
+		if len(c.Proxy.Upstreams) > 1 {
+			fmt.Fprintf(b, "        proxy_pass http://xpanel_%s;\n", c.Name)
+		} else {
+			fmt.Fprintf(b, "        proxy_pass %s;\n", c.Upstream)
+		}
+		hostVal := "$host"
+		if c.Proxy.SendHost != "" {
+			hostVal = c.Proxy.SendHost
+		}
+		fmt.Fprintf(b, "        proxy_set_header Host %s;\n", hostVal)
 		b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 		b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 		b.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+		if c.Proxy.WebSocket {
+			b.WriteString("        proxy_http_version 1.1;\n")
+			b.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
+			b.WriteString("        proxy_set_header Connection \"upgrade\";\n")
+		}
+		for _, h := range c.Proxy.SetHeaders {
+			fmt.Fprintf(b, "        proxy_set_header %s %s;\n", h.Name, h.Value)
+		}
+		if c.Proxy.Cache {
+			fmt.Fprintf(b, "        proxy_cache_valid 200 %ds;\n", c.Proxy.CacheTime)
+		}
 		b.WriteString("    }\n")
 	default:
 		if strings.TrimSpace(c.RewriteRules) != "" {
@@ -227,6 +252,11 @@ func assertConfigNoInjection(c SiteConfig) error {
 	strict := []string{c.Name, c.Root, c.PHPVersion, c.PHPSocket, c.Upstream,
 		c.AccessLog, c.ErrorLog, c.HtpasswdDir, c.SSL.CertPath, c.SSL.KeyPath}
 	strict = append(strict, c.IndexDocs...)
+	strict = append(strict, c.Proxy.Upstreams...)
+	strict = append(strict, c.Proxy.SendHost)
+	for _, h := range c.Proxy.SetHeaders {
+		strict = append(strict, h.Name, h.Value)
+	}
 	for _, d := range c.Domains {
 		strict = append(strict, d.Domain)
 	}

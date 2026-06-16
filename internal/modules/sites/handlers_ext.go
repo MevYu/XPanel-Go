@@ -146,18 +146,72 @@ func (m *Module) handlePutProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ProxyTarget string `json:"proxy_target"`
+		ProxyTarget string        `json:"proxy_target"`
+		Upstreams   []string      `json:"upstreams"`
+		Cache       bool          `json:"cache"`
+		CacheTime   int           `json:"cache_time"`
+		SetHeaders  []ProxyHeader `json:"set_headers"`
+		WebSocket   bool          `json:"websocket"`
+		SendHost    string        `json:"send_host"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	up, err := validUpstream(req.ProxyTarget)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+
+	pc := ProxyConfig{Cache: req.Cache, CacheTime: req.CacheTime, WebSocket: req.WebSocket, SendHost: req.SendHost}
+
+	// 上游:优先多上游列表,否则单 proxy_target。两者其一必填。
+	if len(req.Upstreams) > 0 {
+		if len(req.Upstreams) > 32 {
+			http.Error(w, "too many upstreams (max 32)", http.StatusBadRequest)
+			return
+		}
+		ups := make([]string, 0, len(req.Upstreams))
+		for _, raw := range req.Upstreams {
+			up, err := validUpstream(raw)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			ups = append(ups, up)
+		}
+		pc.Upstreams = ups
+		site.ProxyTarget = ups[0]
+	} else {
+		up, err := validUpstream(req.ProxyTarget)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		site.ProxyTarget = up
+	}
+
+	if pc.Cache && (pc.CacheTime < 1 || pc.CacheTime > 2592000) {
+		http.Error(w, "cache_time must be 1..2592000 seconds", http.StatusBadRequest)
 		return
 	}
-	site.ProxyTarget = up
-	m.applySite(w, r, site, "sites.proxy.update", site.Name+" -> "+up)
+	if len(req.SetHeaders) > 32 {
+		http.Error(w, "too many headers (max 32)", http.StatusBadRequest)
+		return
+	}
+	for _, h := range req.SetHeaders {
+		if !validProxyHeaderName(h.Name) {
+			http.Error(w, "invalid header name "+h.Name, http.StatusBadRequest)
+			return
+		}
+		if err := validProxyHeaderValue(h.Value); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	pc.SetHeaders = req.SetHeaders
+	if !validSendHost(pc.SendHost) {
+		http.Error(w, "invalid send_host", http.StatusBadRequest)
+		return
+	}
+
+	site.Proxy = pc
+	m.applySite(w, r, site, "sites.proxy.update", site.Name+" -> "+site.ProxyTarget)
 }
 
 // --- default docs ---
