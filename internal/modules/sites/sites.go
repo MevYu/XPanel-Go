@@ -113,6 +113,7 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/sites/{id}/run-dir", m.handleGetRunDir)
 	r.Put("/sites/{id}/run-dir", m.handlePutRunDir)
 	r.Put("/sites/{id}/root", m.handlePutRoot)
+	r.Put("/sites/{id}/error-pages", m.handlePutErrorPages)
 
 	r.Get("/sites/{id}/config", m.handleGetConfig)
 	r.Put("/sites/{id}/config", m.handleEditConfig) // 危险写:原始配置可绕白名单,需 admin + 二次确认

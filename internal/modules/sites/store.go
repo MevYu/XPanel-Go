@@ -30,6 +30,7 @@ type Site struct {
 	ProxyTarget    string       `json:"proxy_target"`
 	Proxy          ProxyConfig  `json:"proxy"`
 	Limits         Limits       `json:"limits"`
+	ErrorPages     []ErrorPage  `json:"error_pages"`
 	DirProtect     []DirProtect `json:"dir_protect"`
 	Redirects      []Redirect   `json:"redirects"`
 	AntiLeech      AntiLeech    `json:"anti_leech"`
@@ -103,7 +104,7 @@ func (s *siteStore) putSettings(set Settings) error {
 // siteCols 是 SELECT/scan 共用的全列清单。
 const siteCols = `id, name, domains, kind, listen, enabled, config, created_by, created_at, updated_at,
 	root_dir, php_version, index_docs, ssl, rewrite_rules, proxy_target, dir_protect, redirects,
-	anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits, log_enabled`
+	anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits, log_enabled, error_pages`
 
 func (s *siteStore) list() ([]Site, error) {
 	rows, err := s.db.Query(`SELECT ` + siteCols + ` FROM sites ORDER BY id`)
@@ -138,11 +139,11 @@ func (s *siteStore) create(st Site) (int64, error) {
 	res, err := s.db.Exec(`INSERT INTO sites
 		(name, domains, kind, listen, enabled, config, created_by, created_at, updated_at,
 		 root_dir, php_version, index_docs, ssl, rewrite_rules, proxy_target, dir_protect, redirects,
-		 anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits, log_enabled)
-		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?)`,
+		 anti_leech, access_log, error_log, custom_config, domain_bindings, proxy_config, limits, log_enabled, error_pages)
+		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)`,
 		st.Name, j.domains, st.Kind, st.Listen, boolToInt(st.Enabled), st.Config, st.CreatedBy, now, now,
 		st.RootDir, st.PHPVersion, j.indexDocs, j.ssl, st.RewriteRules, st.ProxyTarget, j.dirProtect, j.redirects,
-		j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits, boolToInt(st.LogEnabled))
+		j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits, boolToInt(st.LogEnabled), j.errorPages)
 	if err != nil {
 		return 0, err
 	}
@@ -155,11 +156,11 @@ func (s *siteStore) update(st Site) error {
 	_, err := s.db.Exec(`UPDATE sites SET
 		domains=?, kind=?, listen=?, enabled=?, config=?, updated_at=?,
 		root_dir=?, php_version=?, index_docs=?, ssl=?, rewrite_rules=?, proxy_target=?,
-		dir_protect=?, redirects=?, anti_leech=?, access_log=?, error_log=?, custom_config=?, domain_bindings=?, proxy_config=?, limits=?, log_enabled=?
+		dir_protect=?, redirects=?, anti_leech=?, access_log=?, error_log=?, custom_config=?, domain_bindings=?, proxy_config=?, limits=?, log_enabled=?, error_pages=?
 		WHERE id=?`,
 		j.domains, st.Kind, st.Listen, boolToInt(st.Enabled), st.Config, time.Now().Unix(),
 		st.RootDir, st.PHPVersion, j.indexDocs, j.ssl, st.RewriteRules, st.ProxyTarget,
-		j.dirProtect, j.redirects, j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits, boolToInt(st.LogEnabled), st.ID)
+		j.dirProtect, j.redirects, j.antiLeech, st.AccessLog, st.ErrorLog, st.CustomConfig, j.domainBindings, j.proxyConfig, j.limits, boolToInt(st.LogEnabled), j.errorPages, st.ID)
 	return err
 }
 
@@ -188,11 +189,11 @@ func scanSite(sc scanner) (Site, error) {
 	var st Site
 	var enabled, logEnabled int
 	var createdBy sql.NullInt64
-	var domainsJSON, indexDocsJSON, sslJSON, dirProtectJSON, redirectsJSON, antiLeechJSON, bindingsJSON, proxyJSON, limitsJSON string
+	var domainsJSON, indexDocsJSON, sslJSON, dirProtectJSON, redirectsJSON, antiLeechJSON, bindingsJSON, proxyJSON, limitsJSON, errorPagesJSON string
 	err := sc.Scan(&st.ID, &st.Name, &domainsJSON, &st.Kind, &st.Listen, &enabled,
 		&st.Config, &createdBy, &st.CreatedAt, &st.UpdatedAt,
 		&st.RootDir, &st.PHPVersion, &indexDocsJSON, &sslJSON, &st.RewriteRules, &st.ProxyTarget,
-		&dirProtectJSON, &redirectsJSON, &antiLeechJSON, &st.AccessLog, &st.ErrorLog, &st.CustomConfig, &bindingsJSON, &proxyJSON, &limitsJSON, &logEnabled)
+		&dirProtectJSON, &redirectsJSON, &antiLeechJSON, &st.AccessLog, &st.ErrorLog, &st.CustomConfig, &bindingsJSON, &proxyJSON, &limitsJSON, &logEnabled, &errorPagesJSON)
 	if err != nil {
 		return Site{}, err
 	}
@@ -214,6 +215,7 @@ func scanSite(sc scanner) (Site, error) {
 		{bindingsJSON, &st.DomainBindings},
 		{proxyJSON, &st.Proxy},
 		{limitsJSON, &st.Limits},
+		{errorPagesJSON, &st.ErrorPages},
 	} {
 		if u.raw == "" {
 			continue
@@ -227,7 +229,7 @@ func scanSite(sc scanner) (Site, error) {
 
 // siteJSON 是一条站点 JSON 列的序列化结果。
 type siteJSON struct {
-	domains, indexDocs, ssl, dirProtect, redirects, antiLeech, domainBindings, proxyConfig, limits string
+	domains, indexDocs, ssl, dirProtect, redirects, antiLeech, domainBindings, proxyConfig, limits, errorPages string
 }
 
 func (st Site) jsonFields() siteJSON {
@@ -241,6 +243,7 @@ func (st Site) jsonFields() siteJSON {
 		domainBindings: mustJSON(st.DomainBindings),
 		proxyConfig:    mustJSON(st.Proxy),
 		limits:         mustJSON(st.Limits),
+		errorPages:     mustJSON(st.ErrorPages),
 	}
 }
 

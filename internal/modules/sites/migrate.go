@@ -23,6 +23,7 @@ var siteColumns = []struct{ name, ddl string }{
 	{"proxy_config", "TEXT NOT NULL DEFAULT '{}'"},
 	{"limits", "TEXT NOT NULL DEFAULT '{}'"},
 	{"log_enabled", "INTEGER NOT NULL DEFAULT 1"},
+	{"error_pages", "TEXT NOT NULL DEFAULT '[]'"},
 }
 
 // migrateSites 幂等补列。

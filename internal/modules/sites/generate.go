@@ -118,6 +118,10 @@ func writeServerBody(b *strings.Builder, c SiteConfig) {
 		fmt.Fprintf(b, "    limit_rate %dk;\n", c.Limits.RateKB)
 	}
 
+	for _, ep := range c.ErrorPages {
+		fmt.Fprintf(b, "    error_page %d %s;\n", ep.Code, ep.Path)
+	}
+
 	writeRedirects(b, c.Redirects)
 	writeDirProtect(b, c)
 	writeAntiLeech(b, c.AntiLeech)
@@ -276,6 +280,9 @@ func assertConfigNoInjection(c SiteConfig) error {
 	}
 	for _, r := range c.Redirects {
 		strict = append(strict, r.From, r.To)
+	}
+	for _, ep := range c.ErrorPages {
+		strict = append(strict, ep.Path)
 	}
 	for _, d := range c.DirProtect {
 		strict = append(strict, d.Path, d.Username, d.PassHash)

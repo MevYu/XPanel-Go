@@ -177,6 +177,12 @@ func validSendHost(s string) bool {
 	return validDomain(strings.ToLower(s))
 }
 
+// errorPageCodes 是允许的自定义错误页状态码白名单。
+var errorPageCodes = map[int]bool{400: true, 401: true, 403: true, 404: true, 405: true, 500: true, 502: true, 503: true, 504: true}
+
+// validErrorPageCode 校验错误页状态码在白名单内。
+func validErrorPageCode(c int) bool { return errorPageCodes[c] }
+
 // safeAbsUnder 校验一个绝对路径必须落在 base 目录内。
 // 拒绝相对路径、.. 穿越、空白/元字符。返回 filepath.Clean 后的路径。
 func safeAbsUnder(base, p string) (string, error) {

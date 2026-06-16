@@ -529,6 +529,36 @@ func (m *Module) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"type": orDefault(logType, "access"), "tail": tail, "content": content})
 }
 
+// handlePutErrorPages 设置自定义错误页。
+func (m *Module) handlePutErrorPages(w http.ResponseWriter, r *http.Request) {
+	site, ok := m.loadForWrite(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		ErrorPages []ErrorPage `json:"error_pages"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if len(req.ErrorPages) > 16 {
+		http.Error(w, "too many error pages (max 16)", http.StatusBadRequest)
+		return
+	}
+	for _, ep := range req.ErrorPages {
+		if !validErrorPageCode(ep.Code) {
+			http.Error(w, "invalid error page code", http.StatusBadRequest)
+			return
+		}
+		if err := validLocationPath(ep.Path); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	site.ErrorPages = req.ErrorPages
+	m.applySite(w, r, site, "sites.errorpages.update", site.Name)
+}
+
 // handlePutLogConfig 开关站点访问日志。
 func (m *Module) handlePutLogConfig(w http.ResponseWriter, r *http.Request) {
 	site, ok := m.loadForWrite(w, r)

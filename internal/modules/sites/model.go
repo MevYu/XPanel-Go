@@ -70,6 +70,12 @@ type Limits struct {
 	Conn   int `json:"conn"`    // 每客户端 IP 并发连接数,0..65535,0 不限
 }
 
+// ErrorPage 是一条自定义错误页映射(error_page <Code> <Path>)。
+type ErrorPage struct {
+	Code int    `json:"code"`
+	Path string `json:"path"`
+}
+
 // SiteConfig 是一个站点的全部结构化设置,渲染器据此组合完整 server block。
 // 字段对应 sites 表的扩展列。零值即"未设置"。
 type SiteConfig struct {
@@ -83,6 +89,7 @@ type SiteConfig struct {
 	Upstream     string       // proxy 目标 scheme://host:port
 	Proxy        ProxyConfig  // 反代进阶设置(多上游/缓存/头/WebSocket)
 	Limits       Limits       // 速率/连接限制
+	ErrorPages   []ErrorPage  // 自定义错误页
 	RewriteRules string       // 伪静态(原始 nginx rewrite 指令,经注入校验)
 	SSL          SSL          // TLS
 	DirProtect   []DirProtect // 目录保护

@@ -456,6 +456,32 @@ func TestPutRoot(t *testing.T) {
 	}
 }
 
+func TestPutErrorPages(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedSite(t, m)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/error-pages",
+		map[string]any{"error_pages": []ErrorPage{{Code: 404, Path: "/404.html"}}}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put error-pages = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !contains(ng.configs["example.com"], "error_page 404 /404.html;") {
+		t.Errorf("error_page not applied\n%s", ng.configs["example.com"])
+	}
+	// invalid code
+	rec = do(m, "PUT", "/sites/"+itoa(id)+"/error-pages",
+		map[string]any{"error_pages": []ErrorPage{{Code: 418, Path: "/teapot.html"}}}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid code should 400, got %d", rec.Code)
+	}
+	// bad path
+	rec = do(m, "PUT", "/sites/"+itoa(id)+"/error-pages",
+		map[string]any{"error_pages": []ErrorPage{{Code: 404, Path: "../etc/passwd"}}}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad path should 400, got %d", rec.Code)
+	}
+}
+
 func TestExtSettingsRequireWriter(t *testing.T) {
 	ng := newMockNginx()
 	m, _ := newTestModule(t, "readonly", ng)
