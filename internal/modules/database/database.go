@@ -25,11 +25,13 @@ type Deps struct {
 // Module 是可开关的数据库管理模块。
 type Module struct {
 	ss   *settingsStore
+	bs   *backupStore
 	deps Deps
 
 	mysqlConn dbConnector
 	pgConn    dbConnector
 	redisConn redisConnector
+	dumper    dumpRestorer
 }
 
 // New 建表并返回模块。secret 用于派生连接密码的 AES-GCM 密钥。
@@ -43,12 +45,18 @@ func New(secret string, st *store.Store, deps Deps) *Module {
 	if err != nil {
 		panic("database: init store: " + err.Error())
 	}
+	bs, err := newBackupStore(st)
+	if err != nil {
+		panic("database: init backup store: " + err.Error())
+	}
 	return &Module{
 		ss:        ss,
+		bs:        bs,
 		deps:      deps,
 		mysqlConn: mysqlConnector,
 		pgConn:    pgConnector,
 		redisConn: realRedisConnector,
+		dumper:    cmdDumpRestorer{},
 	}
 }
 
@@ -91,6 +99,9 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/postgres/users/password", m.handler(dialectPG, opPassword))
 	r.Post("/postgres/grant", m.handler(dialectPG, opGrant))
 	r.Post("/postgres/revoke", m.handler(dialectPG, opRevoke))
+
+	// 库级备份/恢复(在 DB 管理处直接操作,跨 mysql/postgres)
+	m.backupRoutes(r)
 
 	// Redis
 	r.Get("/redis/info", m.handleRedisInfo)
