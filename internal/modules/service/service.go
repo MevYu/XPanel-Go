@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net"
 	"net/http"
@@ -19,9 +20,12 @@ type Deps struct {
 }
 
 // Module 是可开关的服务管理模块:封装 systemctl 启停查。
-type Module struct{ deps Deps }
+type Module struct {
+	deps   Deps
+	runner commandRunner // 默认走真实 systemctl;测试注入样本
+}
 
-func New(deps Deps) *Module { return &Module{deps: deps} }
+func New(deps Deps) *Module { return &Module{deps: deps, runner: systemctlRunner{}} }
 
 func (*Module) Meta() module.ModuleMeta {
 	return module.ModuleMeta{ID: "service", Name: "服务管理", Category: "系统"}
@@ -39,7 +43,19 @@ func (*Module) HealthCheck() error { return system.SystemctlAvailable() }
 
 func (m *Module) Routes(r module.Router) {
 	r.Get("/status", m.handleStatus)                     // 只读:任意已认证角色
+	r.Get("/services", m.handleListServices)             // 只读:列出系统服务
 	r.Post("/{verb:start|stop|restart}", m.handleAction) // 写:需 operator+
+}
+
+func (m *Module) handleListServices(w http.ResponseWriter, _ *http.Request) {
+	services, err := listServices(m.runner)
+	if err != nil {
+		log.Printf("service: list services failed: %v", err)
+		http.Error(w, "services unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(services)
 }
 
 func (m *Module) handleStatus(w http.ResponseWriter, r *http.Request) {
