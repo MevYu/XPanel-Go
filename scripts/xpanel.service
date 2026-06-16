@@ -1,0 +1,23 @@
+[Unit]
+Description=XPanel server management panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# XPanel manages the host (services, firewall, files), so it runs as root.
+# Tighten this only if you scope the panel to a non-privileged subset.
+User=root
+WorkingDirectory=/opt/xpanel
+ExecStart=/usr/local/bin/xpanel
+Restart=on-failure
+RestartSec=3
+# config.json holds the JWT secret; keep the data dir private.
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

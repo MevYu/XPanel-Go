@@ -7,6 +7,7 @@ import (
 
 	"github.com/MevYu/XPanel-Go/internal/auth"
 	"github.com/MevYu/XPanel-Go/internal/module"
+	webui "github.com/MevYu/XPanel-Go/web"
 )
 
 // New 装配整个 HTTP handler:中间件链 + 认证路由 + 受保护示例路由。
@@ -85,6 +86,10 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 		r.Mount("/api/modules", module.ModuleAPI(reg, mgr, PrincipalFromRequest))
 		module.Mount(r, reg, mgr)
 	})
+
+	// catch-all:非 API/公开路由交给 SPA(静态资源或 index.html 回退)。
+	// 中间件链(SecurityHeaders 等)对 NotFound 同样生效。
+	r.NotFound(webui.Handler().ServeHTTP)
 
 	return r
 }

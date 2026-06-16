@@ -1,4 +1,4 @@
-.PHONY: build build-full test test-full vet run
+.PHONY: build build-full test test-full vet run release
 build:
 	go build -o xpanel ./cmd/xpanel
 build-full:
@@ -11,3 +11,5 @@ vet:
 	go vet ./...
 run:
 	go run ./cmd/xpanel
+release:
+	./scripts/build-release.sh
