@@ -47,6 +47,12 @@ func TestGeneratedDefaultsAndEntryPath(t *testing.T) {
 	if c.IPBanHours != 72 {
 		t.Errorf("ip_ban_hours default = %d, want 72", c.IPBanHours)
 	}
+	if c.EntryProbeMax != 10 {
+		t.Errorf("entry_probe_max default = %d, want 10", c.EntryProbeMax)
+	}
+	if c.EntryProbeWindowMinutes != 60 {
+		t.Errorf("entry_probe_window_minutes default = %d, want 60", c.EntryProbeWindowMinutes)
+	}
 	// entry_path = "/" + 16 hex chars.
 	if len(c.EntryPath) != 17 || c.EntryPath[0] != '/' {
 		t.Fatalf("entry_path = %q, want /<16 hex>", c.EntryPath)
@@ -74,6 +80,9 @@ func TestLoadBackfillsDefaultsForOldConfig(t *testing.T) {
 	}
 	if c.LoginMaxAttempts != 3 || c.IPBanHours != 72 || c.EntryPath == "" {
 		t.Fatalf("defaults not backfilled: %+v", c)
+	}
+	if c.EntryProbeMax != 10 || c.EntryProbeWindowMinutes != 60 {
+		t.Fatalf("entry probe defaults not backfilled: %+v", c)
 	}
 	// 回写后再读 entry_path 稳定。
 	c2, _ := Load(path)

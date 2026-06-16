@@ -274,7 +274,13 @@ func main() {
 	loginTOTP := func(userID int64, code string) (enabled, ok bool, err error) {
 		return users.VerifyLoginTOTP(st, cfg.JWTSecret, userID, code)
 	}
-	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath())
+	probeGuard := server.NewEntryProbeGuard(
+		cfg.EntryProbeMax,
+		time.Duration(cfg.EntryProbeWindowMinutes)*time.Minute,
+		banGuard.Ban,
+		time.Now,
+	)
+	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath(), probeGuard)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,

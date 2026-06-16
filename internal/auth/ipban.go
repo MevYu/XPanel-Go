@@ -70,6 +70,17 @@ func (g *IPBanGuard) Fail(ip string) {
 	_ = g.store.BanIP(ip, until)
 }
 
+// Ban 立即封禁该 IP banDuration 并持久化,不经失败计数。
+// 供登录之外的触发器(如入口探测防护)直接调用。
+func (g *IPBanGuard) Ban(ip string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	until := g.now().Add(g.banDuration).Unix()
+	g.banned[ip] = until
+	delete(g.failures, ip)
+	_ = g.store.BanIP(ip, until)
+}
+
 // Reset 清除该 IP 的失败计数(登录成功时调用)。不解除已生效的封禁。
 func (g *IPBanGuard) Reset(ip string) {
 	g.mu.Lock()

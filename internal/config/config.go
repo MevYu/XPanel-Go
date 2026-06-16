@@ -20,6 +20,9 @@ type Config struct {
 	IPBanHours       int      `json:"ip_ban_hours"`       // IP 封禁时长(小时),默认 72
 	EntryPath        string   `json:"entry_path"`         // 隐藏入口路径,首启随机生成(如 /a1b2...)
 	TrustedProxies   []string `json:"trusted_proxies"`    // 受信反代 CIDR/IP 列表,默认空;空=只信 RemoteAddr、忽略 XFF
+
+	EntryProbeMax           int `json:"entry_probe_max"`            // 同一 IP 滑动窗口内命中错误路径(入口探测)次数 > 此值即封禁,默认 10
+	EntryProbeWindowMinutes int `json:"entry_probe_window_minutes"` // 入口探测计数的滑动窗口分钟数,默认 60
 }
 
 // ParseTrustedProxies 把 TrustedProxies 解析成网段。裸 IP 视为 /32 或 /128。
@@ -91,6 +94,14 @@ func (c *Config) applyDefaults() bool {
 		c.EntryPath = randomEntryPath()
 		changed = true
 	}
+	if c.EntryProbeMax <= 0 {
+		c.EntryProbeMax = 10
+		changed = true
+	}
+	if c.EntryProbeWindowMinutes <= 0 {
+		c.EntryProbeWindowMinutes = 60
+		changed = true
+	}
 	return changed
 }
 
@@ -135,12 +146,14 @@ func generate(path string) (Config, error) {
 		return Config{}, err
 	}
 	c := Config{
-		Addr:             "127.0.0.1:8765",
-		DBPath:           "data/xpanel.db",
-		JWTSecret:        base64.StdEncoding.EncodeToString(secret),
-		LoginMaxAttempts: 3,
-		IPBanHours:       72,
-		EntryPath:        randomEntryPath(),
+		Addr:                    "127.0.0.1:8765",
+		DBPath:                  "data/xpanel.db",
+		JWTSecret:               base64.StdEncoding.EncodeToString(secret),
+		LoginMaxAttempts:        3,
+		IPBanHours:              72,
+		EntryPath:               randomEntryPath(),
+		EntryProbeMax:           10,
+		EntryProbeWindowMinutes: 60,
 	}
 	if err := c.save(path); err != nil {
 		return Config{}, err

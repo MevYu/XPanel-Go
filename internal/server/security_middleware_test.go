@@ -37,7 +37,7 @@ func TestIPBanMiddlewareRejectsBannedIP(t *testing.T) {
 func TestEntryGate(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	const entry = "/abc123def456"
-	h := EntryGate(entry)(ok)
+	h := EntryGate(entry, nil)(ok)
 
 	pass := []string{
 		entry, entry + "/", entry + "/dashboard",
@@ -81,7 +81,7 @@ func TestLoginFailuresBanIPAcrossAllEndpoints(t *testing.T) {
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, "/")
+	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, "/", nil)
 
 	login := func() int {
 		rec := httptest.NewRecorder()
@@ -110,5 +110,69 @@ func TestLoginFailuresBanIPAcrossAllEndpoints(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("other IP should not be banned, got %d", rec.Code)
+	}
+}
+
+// 端到端:同一 IP 扫描隐藏入口(错误路径 404)超阈值后,该 IP 被封禁,后续任意请求被拒。
+func TestEntryProbeBansScannerAcrossAllEndpoints(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	jm := auth.NewJWTManager([]byte("test-secret-32-bytes-long-xxxxxx"))
+	guard, err := auth.NewIPBanGuard(st, 3, 72*time.Hour, time.Now)
+	if err != nil {
+		t.Fatalf("guard: %v", err)
+	}
+	svc := auth.NewService(st, jm, auth.NewLockout(5, time.Minute, time.Now)).WithIPBan(guard)
+
+	reg := module.NewRegistry()
+	reg.Register(dashboard.New())
+	mgr := module.NewManager(reg, st)
+	if err := mgr.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	const entry = "/abc123def456"
+	probe := NewEntryProbeGuard(3, time.Hour, guard.Ban, time.Now)
+	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, entry, probe)
+
+	scanner := "6.6.6.6"
+	hit := func(path string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = scanner + ":1111"
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// 前 3 次扫描错误路径:404(探测命中,未超阈值,未封)。
+	for i, p := range []string{"/wp-admin", "/login", "/admin"} {
+		if got := hit(p); got != http.StatusNotFound {
+			t.Fatalf("scan #%d %s want 404, got %d", i, p, got)
+		}
+	}
+	// 第 4 次 > max=3:触发封禁。该次请求由 EntryGate 仍返回 404。
+	if got := hit("/phpmyadmin"); got != http.StatusNotFound {
+		t.Fatalf("4th scan want 404, got %d", got)
+	}
+	// 被封后:任意请求(含 /healthz)被 IPBanMiddleware 拒。
+	if got := hit("/healthz"); got != http.StatusTooManyRequests {
+		t.Fatalf("scanner should be banned, got %d", got)
+	}
+
+	// 正常用户:正确入口 / /healthz / /api 不计探测、不被封。
+	other := "4.4.4.4"
+	hitOther := func(path string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = other + ":2222"
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for i := 0; i < 10; i++ {
+		hitOther(entry)
+		hitOther("/healthz")
+		hitOther("/api/modules")
+	}
+	if got := hitOther("/healthz"); got == http.StatusTooManyRequests {
+		t.Fatal("legit traffic must not trigger probe ban")
 	}
 }

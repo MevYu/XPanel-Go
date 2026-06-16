@@ -98,13 +98,17 @@ func IPBanMiddleware(banned func(ip string) bool, clientIP func(*http.Request) s
 // EntryGate 隐藏面板入口:非白名单前缀且不在 entryPath 下的请求一律 404(不暴露面板)。
 // 白名单:/api/* (含认证)、/s/*(公开模块)、/healthz、/assets/*(静态资源)。
 // entryPath 及其子路径放行给 SPA handler。
-func EntryGate(entryPath string) func(http.Handler) http.Handler {
+// onProbe(非 nil 时)在每次 404(入口探测命中)时以请求为参回调,用于探测计数/封禁。
+func EntryGate(entryPath string, onProbe func(*http.Request)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p := r.URL.Path
 			if isAllowedPrefix(p) || underEntry(p, entryPath) {
 				next.ServeHTTP(w, r)
 				return
+			}
+			if onProbe != nil {
+				onProbe(r)
 			}
 			http.NotFound(w, r)
 		})

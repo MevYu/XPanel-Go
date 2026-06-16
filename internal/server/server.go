@@ -56,13 +56,18 @@ type LoginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err er
 // ipBanned 报告来源 IP 是否被封禁(传 nil 则不启用 IP 封禁门)。
 // trusted 为受信反代网段(来自 config.TrustedProxies);空=只信 RemoteAddr、忽略 XFF。
 // entryPath 为隐藏面板入口路径;SPA 只在此路径下提供,其余非 API/静态请求返回 404。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string) http.Handler {
+// probe 守卫(非 nil 时)记录入口探测命中,超阈值经其内部封禁该 IP。
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard) http.Handler {
 	clientIP := clientIPFunc(trusted)
 	r := chi.NewRouter()
 	if ipBanned != nil {
 		r.Use(IPBanMiddleware(ipBanned, clientIP)) // 最前面:被封 IP 的全部请求直接拒
 	}
-	r.Use(EntryGate(entryPath))
+	var onProbe func(*http.Request)
+	if probe != nil {
+		onProbe = func(req *http.Request) { probe.Probe(clientIP(req)) }
+	}
+	r.Use(EntryGate(entryPath, onProbe)) // IPBanMiddleware 之后:未封 IP 记探测、超阈值触发封禁
 	r.Use(SecurityHeaders)
 	r.Use(NewRateLimiterWithClientIP(60, clientIP).Middleware)
 

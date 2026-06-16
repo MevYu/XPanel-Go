@@ -109,6 +109,27 @@ func TestIPBanThresholdConfigurable(t *testing.T) {
 	}
 }
 
+func TestIPBanDirectBan(t *testing.T) {
+	st := newTestStore(t)
+	now := time.Unix(1000, 0)
+	clock := func() time.Time { return now }
+	g, _ := NewIPBanGuard(st, 3, 72*time.Hour, clock)
+
+	ip := "4.4.4.4"
+	if g.Banned(ip) {
+		t.Fatal("fresh ip must not be banned")
+	}
+	g.Ban(ip)
+	if !g.Banned(ip) {
+		t.Fatal("Ban should immediately ban without failure count")
+	}
+	// 持久化:重启后仍封禁。
+	g2, _ := NewIPBanGuard(st, 3, 72*time.Hour, clock)
+	if !g2.Banned(ip) {
+		t.Fatal("direct ban must survive restart")
+	}
+}
+
 func TestIPBanResetClearsFailures(t *testing.T) {
 	st := newTestStore(t)
 	clock := func() time.Time { return time.Unix(1000, 0) }
