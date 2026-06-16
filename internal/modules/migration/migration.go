@@ -480,6 +480,8 @@ func safeErr(err error) string {
 		return "path not allowed"
 	case errors.Is(err, errNoManifest):
 		return "not a valid migration package"
+	case errors.Is(err, errUnpackTooLarge):
+		return "migration package too large"
 	}
 	return "operation failed"
 }

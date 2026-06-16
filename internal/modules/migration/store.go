@@ -105,22 +105,29 @@ func (s *migrationStore) settings() (Settings, error) {
 	if got.MigrationDir != "" {
 		cur.MigrationDir = got.MigrationDir
 	}
-	if got.MysqlDump != "" {
+	// 载入时也校验:历史/被篡改的非法工具路径回落内置默认名,绝不当程序执行。
+	if got.MysqlDump != "" && validToolPath(got.MysqlDump) {
 		cur.MysqlDump = got.MysqlDump
 	}
-	if got.PgDump != "" {
+	if got.PgDump != "" && validToolPath(got.PgDump) {
 		cur.PgDump = got.PgDump
 	}
-	if got.MysqlCLI != "" {
+	if got.MysqlCLI != "" && validToolPath(got.MysqlCLI) {
 		cur.MysqlCLI = got.MysqlCLI
 	}
-	if got.PsqlCLI != "" {
+	if got.PsqlCLI != "" && validToolPath(got.PsqlCLI) {
 		cur.PsqlCLI = got.PsqlCLI
 	}
 	return cur, nil
 }
 
+// errInvalidToolPath 表示某个 DB 工具配置不是简单二进制名,也不是受信目录下存在的绝对路径。
+var errInvalidToolPath = errors.New("invalid db tool path")
+
 func (s *migrationStore) saveSettings(in Settings) error {
+	if !validToolSettings(in) {
+		return errInvalidToolPath
+	}
 	_, err := s.db.Exec(`INSERT INTO migration_settings
 		(id, migration_dir, mysqldump, pgdump, mysql_cli, psql_cli)
 		VALUES (1, ?, ?, ?, ?, ?)

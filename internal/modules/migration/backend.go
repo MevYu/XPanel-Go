@@ -23,11 +23,21 @@ const (
 	dbEntryName  = "database.sql"
 )
 
+// 解包资源上限(gzip 炸弹 / inode 耗尽防护)。解压总字节与条目数任一超限即中止。
+// 用 var 而非 const 仅为测试可临时调低,生产不修改。
+var (
+	maxUnpackBytes   int64 = 8 << 30 // 解压后写盘总字节上限(8 GiB)
+	maxUnpackEntries       = 200_000 // tar 成员数上限(挡 inode 耗尽)
+)
+
 // errUnsafeEntry 表示 tar 成员路径试图逃出解包根目录(tar slip)。
 var errUnsafeEntry = errors.New("tar entry escapes destination root")
 
 // errNoManifest 表示迁移包缺少 manifest,非本系统导出的合法包。
 var errNoManifest = errors.New("migration package missing manifest")
+
+// errUnpackTooLarge 表示迁移包解压后超出字节/条目上限,疑似炸弹包,已中止。
+var errUnpackTooLarge = errors.New("migration package exceeds unpack limits")
 
 // packer 把站点目录 + 可选数据库转储 + 元信息打成单个迁移包,以及反向解包。
 // 抽象为接口便于 mock 测试导出/导入编排,与真实打包/解包逻辑解耦。
@@ -129,6 +139,8 @@ func (tarPacker) unpack(srcFile, siteDest, dbDumpDest string) (bool, error) {
 	tr := tar.NewReader(gz)
 
 	hasDB := false
+	entries := 0
+	budget := maxUnpackBytes // 跨所有成员共享的剩余可写字节预算
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -136,6 +148,10 @@ func (tarPacker) unpack(srcFile, siteDest, dbDumpDest string) (bool, error) {
 		}
 		if err != nil {
 			return hasDB, err
+		}
+		entries++
+		if entries > maxUnpackEntries {
+			return hasDB, errUnpackTooLarge
 		}
 		switch {
 		case hdr.Name == manifestName:
@@ -145,7 +161,7 @@ func (tarPacker) unpack(srcFile, siteDest, dbDumpDest string) (bool, error) {
 			if dbDumpDest == "" {
 				continue
 			}
-			if err := writeRegularTo(tr, dbDumpDest, 0o600); err != nil {
+			if err := writeRegularTo(tr, dbDumpDest, 0o600, &budget); err != nil {
 				return hasDB, err
 			}
 			hasDB = true
@@ -155,7 +171,7 @@ func (tarPacker) unpack(srcFile, siteDest, dbDumpDest string) (bool, error) {
 			if err != nil {
 				return hasDB, errUnsafeEntry
 			}
-			if err := extractMember(tr, hdr, dest); err != nil {
+			if err := extractMember(tr, hdr, dest, &budget); err != nil {
 				return hasDB, err
 			}
 		default:
@@ -169,7 +185,7 @@ func (tarPacker) unpack(srcFile, siteDest, dbDumpDest string) (bool, error) {
 	return hasDB, nil
 }
 
-func extractMember(tr *tar.Reader, hdr *tar.Header, dest string) error {
+func extractMember(tr *tar.Reader, hdr *tar.Header, dest string, budget *int64) error {
 	switch hdr.Typeflag {
 	case tar.TypeDir:
 		return os.MkdirAll(dest, os.FileMode(hdr.Mode))
@@ -177,14 +193,17 @@ func extractMember(tr *tar.Reader, hdr *tar.Header, dest string) error {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
-		return writeRegularTo(tr, dest, os.FileMode(hdr.Mode))
+		return writeRegularTo(tr, dest, os.FileMode(hdr.Mode), budget)
 	default:
 		// 软链等类型还原时跳过(避免软链逃逸),保守不还原。
 		return nil
 	}
 }
 
-func writeRegularTo(tr io.Reader, dest string, mode os.FileMode) error {
+// writeRegularTo 把 tr 写入 dest,最多消耗 *budget 字节并据实扣减。
+// 用 LimitReader 截到预算+1:若源在预算内仍有剩余字节,说明已超总上限 -> errUnpackTooLarge。
+// 不信任 tar 头里的 Size,以实际读出的字节计预算。
+func writeRegularTo(tr io.Reader, dest string, mode os.FileMode, budget *int64) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -192,11 +211,18 @@ func writeRegularTo(tr io.Reader, dest string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, tr); err != nil {
-		out.Close()
+	n, err := io.Copy(out, io.LimitReader(tr, *budget+1))
+	if cerr := out.Close(); cerr != nil && err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
-	return out.Close()
+	if n > *budget {
+		return errUnpackTooLarge
+	}
+	*budget -= n
+	return nil
 }
 
 func writeManifest(tw *tar.Writer, meta Meta) error {
