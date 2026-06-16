@@ -589,7 +589,7 @@ func (m *Module) handleRegistryLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "docker.registry.login", req.Name+" "+req.Server+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "docker.registry.login", req.Name+" "+req.Server+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("docker: registry login %q failed: %v", req.Name, err)
 		http.Error(w, "registry login failed", http.StatusBadGateway)
@@ -639,7 +639,7 @@ func (m *Module) handleRegistryRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "registry not found", http.StatusNotFound)
 		return
 	}
-	m.deps.Audit(&uid, "docker.registry.remove", name, clientIP(r))
+	m.deps.Audit(&uid, "docker.registry.remove", name, m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{"name": name})
 }
 
