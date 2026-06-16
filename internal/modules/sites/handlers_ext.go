@@ -214,6 +214,32 @@ func (m *Module) handlePutProxy(w http.ResponseWriter, r *http.Request) {
 	m.applySite(w, r, site, "sites.proxy.update", site.Name+" -> "+site.ProxyTarget)
 }
 
+// --- limits ---
+
+func (m *Module) handlePutLimits(w http.ResponseWriter, r *http.Request) {
+	site, ok := m.loadForWrite(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		RateKB int `json:"rate_kb"`
+		Conn   int `json:"conn"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.RateKB < 0 || req.RateKB > 1048576 {
+		http.Error(w, "rate_kb must be 0..1048576", http.StatusBadRequest)
+		return
+	}
+	if req.Conn < 0 || req.Conn > 65535 {
+		http.Error(w, "conn must be 0..65535", http.StatusBadRequest)
+		return
+	}
+	site.Limits = Limits{RateKB: req.RateKB, Conn: req.Conn}
+	m.applySite(w, r, site, "sites.limits.update", site.Name)
+}
+
 // --- default docs ---
 
 func (m *Module) handleGetDefaultDocs(w http.ResponseWriter, r *http.Request) {

@@ -179,6 +179,35 @@ func TestPutProxyInvalidUpstream(t *testing.T) {
 	}
 }
 
+func TestPutLimits(t *testing.T) {
+	ng := newMockNginx()
+	m, _ := newTestModule(t, "operator", ng)
+	id := seedSite(t, m)
+	rec := do(m, "PUT", "/sites/"+itoa(id)+"/limits", map[string]int{"rate_kb": 512, "conn": 10}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put limits = %d (%s)", rec.Code, rec.Body.String())
+	}
+	cfg := ng.configs["example.com"]
+	for _, want := range []string{
+		"limit_conn_zone $binary_remote_addr zone=xpanel_example.com:10m;",
+		"limit_conn xpanel_example.com 10;",
+		"limit_rate 512k;",
+	} {
+		if !contains(cfg, want) {
+			t.Errorf("config missing %q\n%s", want, cfg)
+		}
+	}
+	// out of range
+	rec = do(m, "PUT", "/sites/"+itoa(id)+"/limits", map[string]int{"conn": 70000}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("out-of-range conn should 400, got %d", rec.Code)
+	}
+	rec = do(m, "PUT", "/sites/"+itoa(id)+"/limits", map[string]int{"rate_kb": -1}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("negative rate should 400, got %d", rec.Code)
+	}
+}
+
 func TestPutDomains(t *testing.T) {
 	ng := newMockNginx()
 	m, _ := newTestModule(t, "operator", ng)

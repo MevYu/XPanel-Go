@@ -64,6 +64,12 @@ type ProxyConfig struct {
 	SendHost   string        `json:"send_host"`   // "" | "$host" | "$proxy_host" | 合法域名
 }
 
+// Limits 是站点级速率/连接限制。零值即不限制。
+type Limits struct {
+	RateKB int `json:"rate_kb"` // 每连接限速 KB/s,0..1048576,0 不限
+	Conn   int `json:"conn"`    // 每客户端 IP 并发连接数,0..65535,0 不限
+}
+
 // SiteConfig 是一个站点的全部结构化设置,渲染器据此组合完整 server block。
 // 字段对应 sites 表的扩展列。零值即"未设置"。
 type SiteConfig struct {
@@ -76,6 +82,7 @@ type SiteConfig struct {
 	IndexDocs    []string     // 默认文档,如 [index.php index.html]
 	Upstream     string       // proxy 目标 scheme://host:port
 	Proxy        ProxyConfig  // 反代进阶设置(多上游/缓存/头/WebSocket)
+	Limits       Limits       // 速率/连接限制
 	RewriteRules string       // 伪静态(原始 nginx rewrite 指令,经注入校验)
 	SSL          SSL          // TLS
 	DirProtect   []DirProtect // 目录保护

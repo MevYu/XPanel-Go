@@ -31,6 +31,10 @@ func generateConfig(c SiteConfig) (string, error) {
 		fmt.Fprintf(&b, "upstream xpanel_%s {\n    server %s;\n}\n", c.Name, trimScheme(c.Upstream))
 	}
 
+	if c.Limits.Conn > 0 {
+		fmt.Fprintf(&b, "limit_conn_zone $binary_remote_addr zone=xpanel_%s:10m;\n", c.Name)
+	}
+
 	httpPort := primaryPort(c.Domains)
 
 	if c.SSL.Enabled {
@@ -102,6 +106,13 @@ func writeServerBody(b *strings.Builder, c SiteConfig) {
 	}
 	if len(c.IndexDocs) > 0 {
 		fmt.Fprintf(b, "    index %s;\n", strings.Join(c.IndexDocs, " "))
+	}
+
+	if c.Limits.Conn > 0 {
+		fmt.Fprintf(b, "    limit_conn xpanel_%s %d;\n", c.Name, c.Limits.Conn)
+	}
+	if c.Limits.RateKB > 0 {
+		fmt.Fprintf(b, "    limit_rate %dk;\n", c.Limits.RateKB)
 	}
 
 	writeRedirects(b, c.Redirects)

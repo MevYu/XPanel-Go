@@ -89,6 +89,8 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/sites/{id}/proxy", m.handleGetProxy)
 	r.Put("/sites/{id}/proxy", m.handlePutProxy)
 
+	r.Put("/sites/{id}/limits", m.handlePutLimits)
+
 	r.Get("/sites/{id}/default-docs", m.handleGetDefaultDocs)
 	r.Put("/sites/{id}/default-docs", m.handlePutDefaultDocs)
 

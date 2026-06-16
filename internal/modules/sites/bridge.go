@@ -35,6 +35,7 @@ func siteToConfig(st Site, set Settings) (SiteConfig, error) {
 		IndexDocs:    st.IndexDocs,
 		Upstream:     st.ProxyTarget,
 		Proxy:        st.Proxy,
+		Limits:       st.Limits,
 		RewriteRules: st.RewriteRules,
 		SSL:          st.SSL,
 		DirProtect:   st.DirProtect,
