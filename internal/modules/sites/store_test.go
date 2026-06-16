@@ -31,7 +31,7 @@ func TestSettingsRoundTripDefaults(t *testing.T) {
 		t.Errorf("uninitialized settings = %+v, want defaults", got)
 	}
 	// 写入后读回
-	want := Settings{WebRoot: "/srv/web", ConfDir: "/etc/nginx/sites", LogDir: "/var/log/nginx", PHPSocket: "/run/php/x.sock"}
+	want := Settings{WebRoot: "/srv/web", ConfDir: "/etc/nginx/sites", LogDir: "/var/log/nginx", PHPSocket: "/run/php/x.sock", BackupDir: "/www/backup/site"}
 	if err := ss.putSettings(want); err != nil {
 		t.Fatalf("putSettings: %v", err)
 	}

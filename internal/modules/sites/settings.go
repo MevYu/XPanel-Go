@@ -12,6 +12,7 @@ type Settings struct {
 	ConfDir   string `json:"conf_dir"`   // nginx vhost 配置目录
 	LogDir    string `json:"log_dir"`    // 访问/错误日志目录
 	PHPSocket string `json:"php_socket"` // PHP 站点默认 fastcgi socket
+	BackupDir string `json:"backup_dir"` // 站点备份归档目录
 }
 
 // DefaultSettings 是首次运行的默认路径(对标 aaPanel 习惯)。
@@ -21,6 +22,7 @@ func DefaultSettings() Settings {
 		ConfDir:   "/etc/nginx/conf.d",
 		LogDir:    "/www/wwwlogs",
 		PHPSocket: "/run/php/php-fpm.sock",
+		BackupDir: "/www/backup/site",
 	}
 }
 
@@ -58,6 +60,9 @@ func (s Settings) validate() error {
 	}
 	if err := validPHPSock(s.PHPSocket); err != nil {
 		return fmt.Errorf("php_socket: %w", err)
+	}
+	if err := validAbsDir(s.BackupDir); err != nil {
+		return fmt.Errorf("backup_dir: %w", err)
 	}
 	return nil
 }

@@ -41,6 +41,7 @@ type Module struct {
 	newNginx  func(confDir string) Nginx
 	newIssuer func() acmeIssuer
 	available func() error
+	archiver  Archiver
 	stopCh    chan struct{}
 }
 
@@ -57,6 +58,7 @@ func New(st *store.Store, deps Deps) *Module {
 		newNginx:  func(confDir string) Nginx { return newRealNginx(confDir) },
 		newIssuer: func() acmeIssuer { return newRealACME() },
 		available: func() error { return newRealNginx("").Available() },
+		archiver:  &realArchiver{},
 	}
 }
 
@@ -134,6 +136,10 @@ func (m *Module) Routes(r module.Router) {
 
 	r.Get("/sites/{id}/config", m.handleGetConfig)
 	r.Put("/sites/{id}/config", m.handleEditConfig) // 危险写:原始配置可绕白名单,需 admin + 二次确认
+
+	r.Post("/sites/{id}/backups", m.handleCreateBackup)
+	r.Get("/sites/{id}/backups", m.handleListBackups)
+	r.Get("/sites/{id}/backups/{bid}/download", m.handleDownloadBackup)
 
 	r.Get("/settings", m.handleGetSettings)
 	r.Put("/settings", m.handlePutSettings)

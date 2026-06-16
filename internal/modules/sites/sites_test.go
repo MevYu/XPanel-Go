@@ -21,6 +21,7 @@ func testSettings() Settings {
 		ConfDir:   "/etc/nginx/conf.d",
 		LogDir:    "/www/wwwlogs",
 		PHPSocket: "/run/php/php-fpm.sock",
+		BackupDir: "/www/backup/site",
 	}
 }
 
@@ -291,7 +292,7 @@ func TestSettingsPutValidatedAndUsed(t *testing.T) {
 	ng := newMockNginx()
 	m, _ := newTestModule(t, "admin", ng)
 	// 改 web 根
-	newSet := Settings{WebRoot: "/srv/web", ConfDir: "/etc/nginx/sites", LogDir: "/var/log/nginx", PHPSocket: "/run/php/x.sock"}
+	newSet := Settings{WebRoot: "/srv/web", ConfDir: "/etc/nginx/sites", LogDir: "/var/log/nginx", PHPSocket: "/run/php/x.sock", BackupDir: "/www/backup/site"}
 	rec := do(m, "PUT", "/settings", newSet, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("admin put valid settings should 200, got %d (%s)", rec.Code, rec.Body.String())

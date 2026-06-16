@@ -62,7 +62,17 @@ const createSettingsTable = `CREATE TABLE IF NOT EXISTS site_settings (
 	web_root   TEXT NOT NULL,
 	conf_dir   TEXT NOT NULL,
 	log_dir    TEXT NOT NULL,
-	php_socket TEXT NOT NULL
+	php_socket TEXT NOT NULL,
+	backup_dir TEXT NOT NULL DEFAULT ''
+)`
+
+const createBackupsTable = `CREATE TABLE IF NOT EXISTS site_backups (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	site_id    INTEGER NOT NULL,
+	filename   TEXT NOT NULL,
+	size       INTEGER NOT NULL,
+	created_by INTEGER,
+	created_at INTEGER NOT NULL
 )`
 
 func newSiteStore(st *store.Store) (*siteStore, error) {
@@ -72,6 +82,17 @@ func newSiteStore(st *store.Store) (*siteStore, error) {
 	if _, err := st.DB.Exec(createSettingsTable); err != nil {
 		return nil, err
 	}
+	if _, err := st.DB.Exec(createBackupsTable); err != nil {
+		return nil, err
+	}
+	// 旧库 site_settings 缺 backup_dir 列时幂等补列(CREATE TABLE IF NOT EXISTS 不会改已存在表)。
+	if has, err := hasColumn(st.DB, "site_settings", "backup_dir"); err != nil {
+		return nil, err
+	} else if !has {
+		if _, err := st.DB.Exec(`ALTER TABLE site_settings ADD COLUMN backup_dir TEXT NOT NULL DEFAULT ''`); err != nil {
+			return nil, err
+		}
+	}
 	if err := migrateSites(st.DB); err != nil {
 		return nil, err
 	}
@@ -80,24 +101,28 @@ func newSiteStore(st *store.Store) (*siteStore, error) {
 
 // getSettings 返回持久化设置;无行则返回默认值(不写库,待用户首次 PUT)。
 func (s *siteStore) getSettings() (Settings, error) {
-	row := s.db.QueryRow(`SELECT web_root, conf_dir, log_dir, php_socket FROM site_settings WHERE id = 1`)
+	row := s.db.QueryRow(`SELECT web_root, conf_dir, log_dir, php_socket, backup_dir FROM site_settings WHERE id = 1`)
 	var set Settings
-	err := row.Scan(&set.WebRoot, &set.ConfDir, &set.LogDir, &set.PHPSocket)
+	err := row.Scan(&set.WebRoot, &set.ConfDir, &set.LogDir, &set.PHPSocket, &set.BackupDir)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DefaultSettings(), nil
 	}
 	if err != nil {
 		return Settings{}, err
 	}
+	// 旧行 backup_dir 默认空串(ALTER 补列时),回退到默认值。
+	if set.BackupDir == "" {
+		set.BackupDir = DefaultSettings().BackupDir
+	}
 	return set, nil
 }
 
 func (s *siteStore) putSettings(set Settings) error {
-	_, err := s.db.Exec(`INSERT INTO site_settings (id, web_root, conf_dir, log_dir, php_socket)
-		VALUES (1, ?, ?, ?, ?)
+	_, err := s.db.Exec(`INSERT INTO site_settings (id, web_root, conf_dir, log_dir, php_socket, backup_dir)
+		VALUES (1, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET web_root=excluded.web_root, conf_dir=excluded.conf_dir,
-			log_dir=excluded.log_dir, php_socket=excluded.php_socket`,
-		set.WebRoot, set.ConfDir, set.LogDir, set.PHPSocket)
+			log_dir=excluded.log_dir, php_socket=excluded.php_socket, backup_dir=excluded.backup_dir`,
+		set.WebRoot, set.ConfDir, set.LogDir, set.PHPSocket, set.BackupDir)
 	return err
 }
 
