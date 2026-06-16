@@ -360,7 +360,7 @@ func (m *Module) handlePutRawIni(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "write raw ini", err)
 		return
 	}
-	m.deps.Audit(&uid, "php.ini.raw_update", version, clientIP(r))
+	m.deps.Audit(&uid, "php.ini.raw_update", version, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -427,7 +427,7 @@ func (m *Module) handlePutDisabled(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "write ini", err)
 		return
 	}
-	m.deps.Audit(&uid, "php.disable_functions.update", version+" "+strings.Join(funcs, ","), clientIP(r))
+	m.deps.Audit(&uid, "php.disable_functions.update", version+" "+strings.Join(funcs, ","), m.clientIP(r))
 	writeJSON(w, http.StatusOK, parseDisableFunctions(updated))
 }
 
@@ -494,7 +494,7 @@ func (m *Module) handlePutFpm(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "write fpm pool", err)
 		return
 	}
-	m.deps.Audit(&uid, "php.fpm.config", version+" "+strings.Join(keys(changes), ","), clientIP(r))
+	m.deps.Audit(&uid, "php.fpm.config", version+" "+strings.Join(keys(changes), ","), m.clientIP(r))
 	writeJSON(w, http.StatusOK, parseFpmConfig(updated))
 }
 
