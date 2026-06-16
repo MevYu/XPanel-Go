@@ -25,8 +25,8 @@ func TestCronStoreCRUD(t *testing.T) {
 
 	uid := int64(7)
 	id, err := cs.create(Job{
-		Expr: "0 3 * * *", Command: "/bin/backup.sh", Comment: "nightly",
-		Enabled: true, CreatedBy: &uid,
+		Expr: "0 3 * * *", Type: taskCommand, Payload: payload{Command: "/bin/backup.sh"},
+		Command: "/bin/backup.sh", Comment: "nightly", Enabled: true, CreatedBy: &uid,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -39,15 +39,21 @@ func TestCronStoreCRUD(t *testing.T) {
 	if j.Expr != "0 3 * * *" || j.Command != "/bin/backup.sh" || !j.Enabled {
 		t.Errorf("unexpected job: %+v", j)
 	}
+	if j.Type != taskCommand || j.Payload.Command != "/bin/backup.sh" {
+		t.Errorf("type/payload not persisted: %+v", j)
+	}
 	if j.CreatedBy == nil || *j.CreatedBy != 7 {
 		t.Errorf("created_by not persisted: %+v", j.CreatedBy)
 	}
 
-	if err := cs.update(id, "*/5 * * * *", "/bin/new.sh", "changed"); err != nil {
+	if err := cs.update(id, Job{
+		Expr: "*/5 * * * *", Type: taskURL, Payload: payload{URL: "http://x/y", Timeout: 10},
+		Command: "curl ...", Comment: "changed",
+	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	j, _ = cs.get(id)
-	if j.Expr != "*/5 * * * *" || j.Command != "/bin/new.sh" || j.Comment != "changed" {
+	if j.Expr != "*/5 * * * *" || j.Type != taskURL || j.Payload.URL != "http://x/y" || j.Comment != "changed" {
 		t.Errorf("update not applied: %+v", j)
 	}
 

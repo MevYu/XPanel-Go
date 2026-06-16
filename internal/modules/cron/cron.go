@@ -1,5 +1,10 @@
-// Package cron 实现定时任务模块:管理当前用户的 crontab 托管区,
-// 任务元数据(备注/创建人/启停态/最近运行)存自建表。
+// Package cron 实现定时任务模块:对照 aaPanel 计划任务,支持多种任务类型
+// (Shell 脚本/释放内存/日志切割/访问 URL/裸命令,预留站点与数据库备份)、
+// 友好的周期选择(落成 cron 表达式存库)、进程内调度执行并保存每次执行日志
+// (输出/退出码/耗时),以及立即执行/启停/编辑/删除。
+//
+// 调度与执行在进程内完成(crontab 自身无法记录每次执行结果);同时仍维护用户
+// crontab 的托管区以便外部可见。
 package cron
 
 import (
@@ -8,6 +13,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -24,19 +31,28 @@ type Deps struct {
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
 }
 
+// logCutRoot 是日志切割任务的路径限定根:log_cut 的 path 经 SafeJoin 限定其下。
+const logCutRoot = "/var/log"
+
 // Module 是可开关的定时任务模块。
 type Module struct {
-	cs   *cronStore
-	deps Deps
+	cs    *cronStore
+	deps  Deps
+	sched *scheduler
 }
 
 // New 建表并返回模块。建表失败(如 DB 不可用)直接 panic:模块无法工作。
+// 签名保持不变(st, deps)。
 func New(st *store.Store, deps Deps) *Module {
 	cs, err := newCronStore(st)
 	if err != nil {
 		panic("cron: init store: " + err.Error())
 	}
-	return &Module{cs: cs, deps: deps}
+	r := &execRunner{
+		logCutRoot: logCutRoot,
+		scriptDir:  filepath.Join(os.TempDir(), "xpanel-cron-scripts"),
+	}
+	return &Module{cs: cs, deps: deps, sched: newScheduler(cs, r)}
 }
 
 func (*Module) Meta() module.ModuleMeta {
@@ -47,29 +63,80 @@ func (*Module) Nav() []module.NavItem {
 	return []module.NavItem{{Label: "定时任务", Icon: "clock", Path: "/cron"}}
 }
 
-// Start 启用时把已启用任务同步进 crontab 托管区(保持 DB 与 crontab 一致)。
-func (m *Module) Start(context.Context) error { return m.syncCrontab() }
+// Start 启用时同步 crontab 托管区并启动进程内调度器。
+func (m *Module) Start(context.Context) error {
+	m.sched.start()
+	return m.syncCrontab()
+}
 
-// Stop 不清空 crontab:停用模块不应静默删掉用户已生效的定时任务。
-func (*Module) Stop(context.Context) error { return nil }
+// Stop 停止调度器;不清空 crontab:停用模块不应静默删掉用户已生效的定时任务。
+func (m *Module) Stop(context.Context) error {
+	m.sched.stopLoop()
+	return nil
+}
 
 // HealthCheck:crontab 命令不在则不允许启用。
 func (*Module) HealthCheck() error { return system.CrontabAvailable() }
 
 func (m *Module) Routes(r module.Router) {
 	r.Get("/jobs", m.handleList)                               // 只读
+	r.Get("/jobs/{id}/runs", m.handleRuns)                     // 只读:执行日志
 	r.Post("/jobs", m.handleCreate)                            // 写
 	r.Put("/jobs/{id}", m.handleUpdate)                        // 写
 	r.Delete("/jobs/{id}", m.handleDelete)                     // 写
+	r.Post("/jobs/{id}/run", m.handleRunNow)                   // 写:立即执行
 	r.Post("/jobs/{id}/{verb:enable|disable}", m.handleToggle) // 写
 }
 
+// jobRequest 是 create/update 的请求体。Schedule 与 Type/Payload 描述任务。
+// 兼容旧客户端:若 Schedule.Kind 空且给了顶层 Expr,按 raw 处理;
+// 若 Type 空且给了顶层 Command,按 command 类型处理。
 type jobRequest struct {
+	Schedule Schedule `json:"schedule"`
+	Type     string   `json:"type"`
+	Payload  payload  `json:"payload"`
+	Comment  string   `json:"comment"`
+	Enabled  *bool    `json:"enabled"` // 仅 create 用;nil 默认启用
+
+	// 旧字段(向后兼容)。
 	Expr    string `json:"expr"`
 	Command string `json:"command"`
-	Comment string `json:"comment"`
-	Enabled *bool  `json:"enabled"` // 仅 create 用;nil 默认启用
 }
+
+// resolve 把请求(含兼容字段)归一成 (expr, type, validated payload)。
+func (req jobRequest) resolve() (expr, typ string, p payload, err error) {
+	sched := req.Schedule
+	if sched.Kind == "" && strings.TrimSpace(req.Expr) != "" {
+		sched = Schedule{Kind: schedRaw, Expr: req.Expr}
+	}
+	expr, err = sched.Build()
+	if err != nil {
+		return "", "", payload{}, err
+	}
+
+	typ = req.Type
+	in := req.Payload
+	if typ == "" {
+		typ = taskCommand
+		if in.Command == "" {
+			in.Command = req.Command
+		}
+	}
+	if !validTaskType(typ) {
+		return "", "", payload{}, errInvalid("unknown task type")
+	}
+	p, err = validatePayload(typ, in, logCutRoot)
+	if err != nil {
+		return "", "", payload{}, err
+	}
+	return expr, typ, p, nil
+}
+
+// errInvalid 是校验错误的简单封装,handler 据此回 400。
+type validationError struct{ msg string }
+
+func (e validationError) Error() string { return e.msg }
+func errInvalid(msg string) error       { return validationError{msg} }
 
 func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 	jobs, err := m.cs.list()
@@ -84,6 +151,29 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, jobs)
 }
 
+func (m *Module) handleRuns(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	limit := maxRunsPerJob
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	runs, err := m.cs.runs(id, limit)
+	if err != nil {
+		log.Printf("cron: runs failed: %v", err)
+		http.Error(w, "runs failed", http.StatusInternalServerError)
+		return
+	}
+	if runs == nil {
+		runs = []runRecord{}
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	uid, ok := m.requireWriter(w, r)
 	if !ok {
@@ -93,7 +183,9 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !validateJob(w, req) {
+	expr, typ, p, err := req.resolve()
+	if err != nil {
+		http.Error(w, "invalid job: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	enabled := true
@@ -101,7 +193,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 	id, err := m.cs.create(Job{
-		Expr: strings.TrimSpace(req.Expr), Command: strings.TrimSpace(req.Command),
+		Expr: expr, Type: typ, Payload: p, Command: derivedCommand(typ, p),
 		Comment: req.Comment, Enabled: enabled, CreatedBy: &uid,
 	})
 	if err != nil {
@@ -114,7 +206,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "crontab sync failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "cron.create", strconv.FormatInt(id, 10)+" "+req.Expr, clientIP(r))
+	m.deps.Audit(&uid, "cron.create", strconv.FormatInt(id, 10)+" "+typ+" "+expr, clientIP(r))
 	job, _ := m.cs.get(id)
 	writeJSON(w, http.StatusCreated, job)
 }
@@ -132,14 +224,18 @@ func (m *Module) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !validateJob(w, req) {
+	expr, typ, p, err := req.resolve()
+	if err != nil {
+		http.Error(w, "invalid job: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if _, err := m.cs.get(id); err != nil {
 		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}
-	if err := m.cs.update(id, strings.TrimSpace(req.Expr), strings.TrimSpace(req.Command), req.Comment); err != nil {
+	if err := m.cs.update(id, Job{
+		Expr: expr, Type: typ, Payload: p, Command: derivedCommand(typ, p), Comment: req.Comment,
+	}); err != nil {
 		log.Printf("cron: update failed: %v", err)
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
@@ -157,6 +253,9 @@ func (m *Module) handleUpdate(w http.ResponseWriter, r *http.Request) {
 func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	uid, ok := m.requireWriter(w, r)
 	if !ok {
+		return
+	}
+	if !m.requireDangerConfirm(w, r) {
 		return
 	}
 	id, ok := parseID(w, r)
@@ -207,6 +306,32 @@ func (m *Module) handleToggle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+// handleRunNow 立即同步执行一次任务并记录,返回本次执行结果。
+func (m *Module) handleRunNow(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireWriter(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	job, err := m.cs.get(id)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+	res := m.sched.run.run(r.Context(), job)
+	if err := m.cs.recordRun(id, res); err != nil {
+		log.Printf("cron: record run-now failed: %v", err)
+	}
+	m.deps.Audit(&uid, "cron.run", strconv.FormatInt(id, 10), clientIP(r))
+	writeJSON(w, http.StatusOK, runRecord{
+		JobID: id, StartedAt: res.StartedAt, DurationMs: res.DurationMs,
+		ExitCode: res.ExitCode, Output: res.Output, Err: res.Err,
+	})
+}
+
 // syncCrontab 用所有启用任务重写 crontab 托管区,保留区外用户行。
 func (m *Module) syncCrontab() error {
 	jobs, err := m.cs.enabled()
@@ -237,14 +362,15 @@ func (m *Module) requireWriter(w http.ResponseWriter, r *http.Request) (int64, b
 	return uid, true
 }
 
-// validateJob 校验 cron 表达式与命令。失败时已写 400,返回 false。
-func validateJob(w http.ResponseWriter, req jobRequest) bool {
-	if !system.ValidCronExpr(req.Expr) {
-		http.Error(w, "invalid cron expression (need 5 fields, safe chars only)", http.StatusBadRequest)
+// requireDangerConfirm 对危险操作要求 admin + X-Confirm-Danger 头。
+func (m *Module) requireDangerConfirm(w http.ResponseWriter, r *http.Request) bool {
+	_, role := m.deps.Principal(r)
+	if role != "admin" {
+		http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
 		return false
 	}
-	if !system.ValidCronCommand(req.Command) {
-		http.Error(w, "invalid command (no newlines or % allowed)", http.StatusBadRequest)
+	if r.Header.Get("X-Confirm-Danger") == "" {
+		http.Error(w, "missing X-Confirm-Danger header", http.StatusPreconditionRequired)
 		return false
 	}
 	return true
@@ -252,7 +378,7 @@ func validateJob(w http.ResponseWriter, req jobRequest) bool {
 
 func decode(w http.ResponseWriter, r *http.Request) (jobRequest, bool) {
 	var req jobRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return jobRequest{}, false
 	}
