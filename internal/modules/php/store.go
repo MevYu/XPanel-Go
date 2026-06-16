@@ -40,6 +40,7 @@ func (s *phpStore) getSettings() (Settings, error) {
 	if err := json.Unmarshal([]byte(v), &out); err != nil {
 		return Settings{}, err
 	}
+	out.fillDebianDefaults()
 	return out, nil
 }
 

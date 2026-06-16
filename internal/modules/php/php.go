@@ -142,6 +142,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &s) {
 		return
 	}
+	s.fillDebianDefaults()
 	if err := s.Validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -159,9 +160,12 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // VersionInfo 是一个已安装版本的视图。
 type VersionInfo struct {
 	Version    string `json:"version"`
+	Source     string `json:"source"`      // 来源布局:aapanel | debian
 	Banner     string `json:"banner"`      // php -v 首行;detect 失败为空
+	IniPath    string `json:"ini_path"`    // 该版本 php.ini 路径
+	PoolConf   string `json:"pool_conf"`   // 该版本 fpm pool 配置路径
 	FpmUnit    string `json:"fpm_unit"`    // 对应 php-fpm systemd 单元名
-	FpmActive  bool   `json:"fpm_active"`  // php-fpm 是否在运行(systemctl is-active)
+	FpmActive  bool   `json:"fpm_active"`  // php-fpm 是否在运行
 	CLIDefault bool   `json:"cli_default"` // 是否为命令行默认版本(php -v 横幅匹配)
 }
 
@@ -173,18 +177,57 @@ func (m *Module) handleListVersions(w http.ResponseWriter, _ *http.Request) {
 	}
 	cliBanner, _ := m.run.CLIVersion()
 	cliBanner = firstLine(cliBanner)
-	versions := detectVersions(set.InstallBase)
-	out := make([]VersionInfo, 0, len(versions))
-	for _, v := range versions {
-		info := VersionInfo{Version: v, FpmUnit: set.fpmUnit(v)}
-		if banner, err := m.run.Version(set.phpBin(v)); err == nil {
+
+	// aaPanel 版本优先;Debian 安装并入,版本冲突时 aaPanel 胜出(不覆盖)。
+	seen := make(map[string]bool)
+	var paths []versionPaths
+	for _, v := range detectVersions(set.InstallBase) {
+		seen[v] = true
+		paths = append(paths, set.aapanelPaths(v))
+	}
+	for _, in := range detectDebianInstalls(set.DebianRoot, set.DebianBinDir) {
+		if seen[in.Version] {
+			continue
+		}
+		paths = append(paths, debianPaths(in))
+	}
+
+	out := make([]VersionInfo, 0, len(paths))
+	for _, p := range paths {
+		info := VersionInfo{
+			Version:  p.Version,
+			Source:   p.Source,
+			IniPath:  p.IniPath,
+			PoolConf: p.PoolConf,
+			FpmUnit:  p.FpmUnit,
+		}
+		if banner, err := m.run.Version(p.PhpBin); err == nil {
 			info.Banner = firstLine(banner)
 			info.CLIDefault = cliBanner != "" && info.Banner == cliBanner
 		}
-		info.FpmActive = m.run.FpmActive(info.FpmUnit)
+		info.FpmActive = m.fpmActive(set, p.FpmUnit)
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// fpmActive 报告 php-fpm 单元是否在运行:优先 systemctl is-active;无 systemd(Available 失败)
+// 时退化为扫 procfs 找 php-fpm<ver> 主进程。
+func (m *Module) fpmActive(set Settings, unit string) bool {
+	if m.run.Available() == nil {
+		return m.run.FpmActive(unit)
+	}
+	return probeFpmActiveProc(unit, set.ProcRoot)
+}
+
+// resolvePaths 解析某版本路径集;查不到时已写 404,返回 ok=false。
+func (m *Module) resolvePaths(w http.ResponseWriter, set Settings, version string) (versionPaths, bool) {
+	p, ok := set.resolveVersion(version)
+	if !ok {
+		http.Error(w, "php version not installed", http.StatusNotFound)
+		return versionPaths{}, false
+	}
+	return p, true
 }
 
 func (m *Module) handleCLIVersion(w http.ResponseWriter, _ *http.Request) {
@@ -247,7 +290,11 @@ func (m *Module) handleGetIni(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	content, err := os.ReadFile(set.iniPath(version))
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	content, err := os.ReadFile(p.IniPath)
 	if err != nil {
 		log.Printf("php: read ini for %q failed: %v", version, err)
 		http.Error(w, "php.ini unavailable", http.StatusNotFound)
@@ -282,7 +329,11 @@ func (m *Module) handlePutIni(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	path := set.iniPath(version)
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	path := p.IniPath
 	content, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("php: read ini for %q failed: %v", version, err)
@@ -314,7 +365,11 @@ func (m *Module) handleGetRawIni(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	content, err := os.ReadFile(set.iniPath(version))
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	content, err := os.ReadFile(p.IniPath)
 	if err != nil {
 		log.Printf("php: read raw ini for %q failed: %v", version, err)
 		http.Error(w, "php.ini unavailable", http.StatusNotFound)
@@ -351,7 +406,11 @@ func (m *Module) handlePutRawIni(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	path := set.iniPath(version)
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	path := p.IniPath
 	if _, err := os.Stat(path); err != nil {
 		http.Error(w, "php.ini unavailable", http.StatusNotFound)
 		return
@@ -380,7 +439,11 @@ func (m *Module) handleGetDisabled(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	content, err := os.ReadFile(set.iniPath(version))
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	content, err := os.ReadFile(p.IniPath)
 	if err != nil {
 		log.Printf("php: read ini for %q failed: %v", version, err)
 		http.Error(w, "php.ini unavailable", http.StatusNotFound)
@@ -415,7 +478,11 @@ func (m *Module) handlePutDisabled(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	path := set.iniPath(version)
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	path := p.IniPath
 	content, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("php: read ini for %q failed: %v", version, err)
@@ -447,7 +514,11 @@ func (m *Module) handleGetFpm(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	content, err := os.ReadFile(set.fpmPoolConf(version))
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	content, err := os.ReadFile(p.PoolConf)
 	if err != nil {
 		log.Printf("php: read fpm pool for %q failed: %v", version, err)
 		http.Error(w, "fpm pool config unavailable", http.StatusNotFound)
@@ -482,7 +553,11 @@ func (m *Module) handlePutFpm(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	path := set.fpmPoolConf(version)
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	path := p.PoolConf
 	content, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("php: read fpm pool for %q failed: %v", version, err)
@@ -508,13 +583,17 @@ func (m *Module) handleFpmStatus(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	unit := set.fpmUnit(version)
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	unit := p.FpmUnit
 	out, _ := m.run.FpmAction("status", unit)
 	resp := struct {
 		Unit   string `json:"unit"`
 		Active bool   `json:"active"`
 		Status string `json:"status"`
-	}{Unit: unit, Active: m.run.FpmActive(unit), Status: out}
+	}{Unit: unit, Active: m.fpmActive(set, unit), Status: out}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -530,12 +609,16 @@ func (m *Module) handleLog(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
 	var path string
 	switch chi.URLParamFromCtx(r.Context(), "kind") {
 	case "slow":
-		path = set.slowLogPath(version)
+		path = p.SlowLog
 	case "error":
-		path = set.errorLogPath(version)
+		path = p.ErrorLog
 	default:
 		http.Error(w, "unknown log kind", http.StatusBadRequest)
 		return
@@ -573,7 +656,11 @@ func (m *Module) handleListExtensions(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	raw, err := m.run.Modules(set.phpBin(version))
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	raw, err := m.run.Modules(p.PhpBin)
 	if err != nil {
 		log.Printf("php: list modules for %q failed: %v", version, err)
 		http.Error(w, "extensions unavailable", http.StatusInternalServerError)
@@ -606,7 +693,11 @@ func (m *Module) handleToggleExtension(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	if err := m.toggleExtension(set, version, ext, op == "enable"); err != nil {
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	if err := toggleExtension(p.ExtDir, ext, op == "enable"); err != nil {
 		serverError(w, "toggle extension", err)
 		return
 	}
@@ -614,10 +705,9 @@ func (m *Module) handleToggleExtension(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// toggleExtension 通过在版本的 php.d 目录写/删 <ext>.ini 启用/禁用扩展。
-// version/ext 须已白名单校验,故拼出的路径无逃逸风险。
-func (m *Module) toggleExtension(set Settings, version, ext string, enable bool) error {
-	dir := set.extConfDir(version)
+// toggleExtension 通过在版本的扩展 ini 目录写/删 <ext>.ini 启用/禁用扩展。
+// dir/ext 须已白名单校验,故拼出的路径无逃逸风险。
+func toggleExtension(dir, ext string, enable bool) error {
 	path := filepath.Join(dir, ext+".ini")
 	if enable {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -652,7 +742,11 @@ func (m *Module) handleFpmAction(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
-	unit := set.fpmUnit(version)
+	p, ok := m.resolvePaths(w, set, version)
+	if !ok {
+		return
+	}
+	unit := p.FpmUnit
 	out, err := m.run.FpmAction(verb, unit)
 	outcome := "ok"
 	if err != nil {
