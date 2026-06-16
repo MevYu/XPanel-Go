@@ -30,6 +30,7 @@ type Module struct {
 	mysqlConn dbConnector
 	pgConn    dbConnector
 	redisConn redisConnector
+	dumpRun   dumpRunner
 }
 
 // New 建表并返回模块。secret 用于派生连接密码的 AES-GCM 密钥。
@@ -49,6 +50,7 @@ func New(secret string, st *store.Store, deps Deps) *Module {
 		mysqlConn: mysqlConnector,
 		pgConn:    pgConnector,
 		redisConn: realRedisConnector,
+		dumpRun:   execDumpRunner{},
 	}
 }
 
@@ -80,6 +82,8 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/mysql/users/password", m.handler(dialectMySQL, opPassword))
 	r.Post("/mysql/grant", m.handler(dialectMySQL, opGrant))
 	r.Post("/mysql/revoke", m.handler(dialectMySQL, opRevoke))
+	r.Get("/mysql/export", m.handleExport(dialectMySQL))  // 导出某库为 .sql(可 gzip,下载)
+	r.Post("/mysql/import", m.handleImport(dialectMySQL)) // 导入上传 .sql(危险)
 
 	// PostgreSQL
 	r.Get("/postgres/databases", m.handler(dialectPG, opListDB))
@@ -91,11 +95,15 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/postgres/users/password", m.handler(dialectPG, opPassword))
 	r.Post("/postgres/grant", m.handler(dialectPG, opGrant))
 	r.Post("/postgres/revoke", m.handler(dialectPG, opRevoke))
+	r.Get("/postgres/export", m.handleExport(dialectPG))  // 导出某库为 .sql(可 gzip,下载)
+	r.Post("/postgres/import", m.handleImport(dialectPG)) // 导入上传 .sql(危险)
 
 	// Redis
 	r.Get("/redis/info", m.handleRedisInfo)
 	r.Get("/redis/dbsize", m.handleRedisDBSize)
-	r.Post("/redis/flushdb", m.handleRedisFlush) // 危险
+	r.Get("/redis/config", m.handleRedisConfig)   // CONFIG GET 常用项
+	r.Get("/redis/details", m.handleRedisDetails) // 连接数/内存详情(解析 INFO 段)
+	r.Post("/redis/flushdb", m.handleRedisFlush)  // 危险
 }
 
 // opKind 标识一个 SQL 操作类型,驱动统一的 handler 派发。
@@ -145,9 +153,20 @@ func (k opKind) action() string {
 
 // opRequest 是建/删/授权类操作的请求体。
 type opRequest struct {
-	Database string `json:"database"`
-	User     string `json:"user"`
-	Password string `json:"password"`
+	Database  string `json:"database"`
+	User      string `json:"user"`
+	Password  string `json:"password"`
+	Host      string `json:"host"`      // MySQL 账户主机(localhost/%/IP);PG 忽略。空 → 默认 %
+	Charset   string `json:"charset"`   // 建库可选字符集 / PG 编码
+	Collation string `json:"collation"` // 建库可选排序规则 / PG LC_COLLATE
+}
+
+// hostOrDefault 取请求 host,空则默认 "%"(任意主机)。
+func (r opRequest) hostOrDefault() string {
+	if r.Host == "" {
+		return "%"
+	}
+	return r.Host
 }
 
 // handler 生成某方言某操作的 HTTP 处理器:统一 RBAC、危险确认、校验、连库、审计。
@@ -227,25 +246,37 @@ func (m *Module) engineName(d dialect) string {
 func runOp(ctx context.Context, ops sqlOps, k opKind, req opRequest) (any, error) {
 	switch k {
 	case opListDB:
-		names, err := ops.listDatabases(ctx)
-		return orEmpty(names), err
+		infos, err := ops.listDatabasesInfo(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if infos == nil {
+			infos = []dbInfo{}
+		}
+		return infos, nil
 	case opListUser:
-		names, err := ops.listUsers(ctx)
-		return orEmpty(names), err
+		infos, err := ops.listUsersInfo(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if infos == nil {
+			infos = []userInfo{}
+		}
+		return infos, nil
 	case opCreateDB:
-		return nil, ops.createDatabase(ctx, req.Database)
+		return nil, ops.createDatabase(ctx, req.Database, req.Charset, req.Collation)
 	case opDropDB:
 		return nil, ops.dropDatabase(ctx, req.Database)
 	case opCreateUser:
-		return nil, ops.createUser(ctx, req.User, req.Password)
+		return nil, ops.createUser(ctx, req.User, req.Password, req.hostOrDefault())
 	case opDropUser:
-		return nil, ops.dropUser(ctx, req.User)
+		return nil, ops.dropUser(ctx, req.User, req.hostOrDefault())
 	case opPassword:
-		return nil, ops.setPassword(ctx, req.User, req.Password)
+		return nil, ops.setPassword(ctx, req.User, req.Password, req.hostOrDefault())
 	case opGrant:
-		return nil, ops.grantAll(ctx, req.Database, req.User)
+		return nil, ops.grantAll(ctx, req.Database, req.User, req.hostOrDefault())
 	case opRevoke:
-		return nil, ops.revokeAll(ctx, req.Database, req.User)
+		return nil, ops.revokeAll(ctx, req.Database, req.User, req.hostOrDefault())
 	}
 	return nil, errors.New("unknown operation")
 }
@@ -270,6 +301,22 @@ func validateOp(w http.ResponseWriter, k opKind, req opRequest) bool {
 			return false
 		}
 	}
+	// host 仅 MySQL 用,空表示默认 %;非空必须过白名单。
+	if needUser && req.Host != "" && !validHost(req.Host) {
+		http.Error(w, errInvalidHost.Error(), http.StatusBadRequest)
+		return false
+	}
+	// 建库可选字符集/排序规则,非空必须过白名单。
+	if k == opCreateDB {
+		if req.Charset != "" && !validCharset(req.Charset) {
+			http.Error(w, errInvalidCharset.Error(), http.StatusBadRequest)
+			return false
+		}
+		if req.Collation != "" && !validCharset(req.Collation) {
+			http.Error(w, errInvalidCharset.Error(), http.StatusBadRequest)
+			return false
+		}
+	}
 	return true
 }
 
@@ -279,9 +326,9 @@ func opDetail(k opKind, req opRequest) string {
 	case opCreateDB, opDropDB:
 		return "db=" + req.Database
 	case opCreateUser, opDropUser, opPassword:
-		return "user=" + req.User
+		return "user=" + req.User + "@" + req.hostOrDefault()
 	case opGrant, opRevoke:
-		return "db=" + req.Database + " user=" + req.User
+		return "db=" + req.Database + " user=" + req.User + "@" + req.hostOrDefault()
 	}
 	return ""
 }

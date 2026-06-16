@@ -14,12 +14,17 @@ import (
 type mockSQL struct {
 	execs   []string
 	queries []string
-	rows    []string
+	rows    []string            // queryStrings 返回
+	rowMaps []map[string]string // queryRows 返回
 }
 
 func (m *mockSQL) queryStrings(_ context.Context, q string, _ ...any) ([]string, error) {
 	m.queries = append(m.queries, q)
 	return m.rows, nil
+}
+func (m *mockSQL) queryRows(_ context.Context, q string, _ ...any) ([]map[string]string, error) {
+	m.queries = append(m.queries, q)
+	return m.rowMaps, nil
 }
 func (m *mockSQL) exec(_ context.Context, q string, _ ...any) error {
 	m.execs = append(m.execs, q)
@@ -31,10 +36,16 @@ func (m *mockSQL) close() error               { return nil }
 // mockRedis 记录调用。
 type mockRedis struct{ flushed bool }
 
-func (m *mockRedis) info(context.Context) (string, error)  { return "redis_version:7.0\n", nil }
+func (m *mockRedis) info(context.Context) (string, error) { return "redis_version:7.0\n", nil }
+func (m *mockRedis) infoSection(_ context.Context, section string) (string, error) {
+	return "# " + section + "\nused_memory:1024\nconnected_clients:3\n", nil
+}
 func (m *mockRedis) dbSize(context.Context) (int64, error) { return 42, nil }
-func (m *mockRedis) flushDB(context.Context) error         { m.flushed = true; return nil }
-func (m *mockRedis) close() error                          { return nil }
+func (m *mockRedis) configGet(_ context.Context, param string) (map[string]string, error) {
+	return map[string]string{param: "value"}, nil
+}
+func (m *mockRedis) flushDB(context.Context) error { m.flushed = true; return nil }
+func (m *mockRedis) close() error                  { return nil }
 
 func newTestModule(t *testing.T, role string, audited *int) (*Module, *mockSQL, *mockRedis) {
 	t.Helper()
@@ -244,13 +255,19 @@ func TestGrantRevoke(t *testing.T) {
 
 func TestListDatabases(t *testing.T) {
 	m, sql, _ := newTestModule(t, "admin", new(int))
-	sql.rows = []string{"information_schema", "app"}
+	sql.rowMaps = []map[string]string{
+		{"name": "app", "charset": "utf8mb4", "collation": "utf8mb4_unicode_ci", "tables": "5", "bytes": "2097152"},
+	}
 	rec := do(router(m), "GET", "/mysql/databases", "", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "app") {
-		t.Errorf("list body = %s", rec.Body)
+	body := rec.Body.String()
+	// 元信息字段都在:库名、字符集、排序规则、表数、2MB → "2.00"
+	for _, want := range []string{"app", "utf8mb4", "utf8mb4_unicode_ci", `"tables":5`, `"size_mb":"2.00"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("list body missing %q: %s", want, body)
+		}
 	}
 }
 
