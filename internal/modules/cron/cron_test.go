@@ -57,8 +57,15 @@ func newTestModule(t *testing.T, role string) (*Module, http.Handler, *[]string)
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	return doH(t, h, method, path, body, nil)
+}
+
+func doH(t *testing.T, h http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -167,7 +174,7 @@ func TestDeleteRemovesJob(t *testing.T) {
 	var j Job
 	_ = json.Unmarshal(rec.Body.Bytes(), &j)
 
-	rec = do(t, h, http.MethodDelete, "/jobs/"+itoa(j.ID), "")
+	rec = doH(t, h, http.MethodDelete, "/jobs/"+itoa(j.ID), "", map[string]string{"X-Confirm-Danger": "yes"})
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete: want 204, got %d", rec.Code)
 	}
