@@ -142,13 +142,18 @@ func TestDisableValidationErrorShown(t *testing.T) {
 	}
 }
 
+// routedStartFail 把 startFailModule 暴露为带路由的 Module。Start 失败仍是真错误,
+// 用于验证内部错误信息不泄漏给客户端。
+type routedStartFail struct{ startFailModule }
+
+func (routedStartFail) Routes(Router) {}
+
 func TestEnableInternalErrorMasked(t *testing.T) {
 	// Start 失败是真正的内部错误,仍须屏蔽成通用文案(不泄漏内部路径)。
 	st, _ := store.Open(":memory:")
 	defer st.Close()
 	reg := NewRegistry()
-	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, startErr: errors.New("/secret/path missing")}
-	reg.Register(routedStartStop{m})
+	reg.Register(routedStartFail{startFailModule{fakeModule: fakeModule{id: "svc"}}})
 	mgr := NewManager(reg, st)
 
 	root := chi.NewRouter()
@@ -160,7 +165,7 @@ func TestEnableInternalErrorMasked(t *testing.T) {
 		t.Fatalf("enable start failure should 409, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "/secret/path") {
+	if strings.Contains(body, "start boom") {
 		t.Errorf("internal error leaked to client: %q", body)
 	}
 	if !strings.Contains(body, "module operation failed") {
@@ -168,28 +173,60 @@ func TestEnableInternalErrorMasked(t *testing.T) {
 	}
 }
 
-func TestEnableHealthCheckReasonShown(t *testing.T) {
-	// HealthCheck 失败原因(缺依赖软件)对用户可见、可操作 → 必须回到前端,而非通用文案。
+func TestModuleListIncludesHealth(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	defer st.Close()
 	reg := NewRegistry()
-	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, healthErr: errors.New("nginx not found")}
-	reg.Register(routedStartStop{m})
+	healthy := &startStopModule{fakeModule: fakeModule{id: "ok"}}
+	degraded := &startStopModule{fakeModule: fakeModule{id: "bad"}, healthErr: errors.New("systemctl not found")}
+	reg.Register(routedStartStop{healthy})
+	reg.Register(routedStartStop{degraded})
 	mgr := NewManager(reg, st)
+	if err := mgr.Enable("ok"); err != nil {
+		t.Fatalf("enable ok: %v", err)
+	}
+	if err := mgr.Enable("bad"); err != nil {
+		t.Fatalf("enable bad (degraded) should succeed: %v", err)
+	}
 
 	root := chi.NewRouter()
 	root.Mount("/api/modules", ModuleAPI(reg, mgr, adminPrincipal))
 
 	rec := httptest.NewRecorder()
-	root.ServeHTTP(rec, httptest.NewRequest("POST", "/api/modules/svc/enable", nil))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("enable health-check failure should 409, got %d", rec.Code)
+	root.ServeHTTP(rec, httptest.NewRequest("GET", "/api/modules", nil))
+	if rec.Code != 200 {
+		t.Fatalf("list status %d", rec.Code)
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "nginx not found") {
-		t.Errorf("HealthCheck reason should be shown to user, body: %q", body)
+	var list []struct {
+		ID     string `json:"id"`
+		Health struct {
+			OK     bool   `json:"ok"`
+			Reason string `json:"reason"`
+		} `json:"health"`
 	}
-	if strings.Contains(body, "module operation failed") {
-		t.Errorf("HealthCheck failure must not be masked, body: %q", body)
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("unmarshal: %v, body=%s", err, rec.Body.String())
+	}
+	byID := map[string]struct {
+		OK     bool
+		Reason string
+	}{}
+	for _, it := range list {
+		byID[it.ID] = struct {
+			OK     bool
+			Reason string
+		}{it.Health.OK, it.Health.Reason}
+	}
+	if !byID["ok"].OK {
+		t.Errorf("ok module health should be OK, got %+v", byID["ok"])
+	}
+	if byID["bad"].OK {
+		t.Errorf("bad module health should not be OK, got %+v", byID["bad"])
+	}
+	if byID["bad"].Reason != "systemctl not found" {
+		t.Errorf("bad module reason = %q, want %q", byID["bad"].Reason, "systemctl not found")
+	}
+	if !strings.Contains(rec.Body.String(), `"health"`) {
+		t.Errorf("list item must contain health field, body: %s", rec.Body.String())
 	}
 }

@@ -2,7 +2,6 @@ package module
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/MevYu/XPanel-Go/internal/store"
@@ -24,6 +23,11 @@ func (m *startStopModule) Start(Context) error {
 }
 func (m *startStopModule) Stop(Context) error { m.started = false; return nil }
 func (m *startStopModule) HealthCheck() error { return m.healthErr }
+
+type startFailModule struct{ fakeModule }
+
+func (startFailModule) Start(Context) error { return errors.New("start boom") }
+func (startFailModule) HealthCheck() error  { return nil }
 
 func newManager(t *testing.T, mods ...Module) (*Manager, *store.Store) {
 	t.Helper()
@@ -58,24 +62,59 @@ func TestEnableStartsModuleAndPersists(t *testing.T) {
 	}
 }
 
-func TestEnableFailsHealthCheck(t *testing.T) {
-	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, healthErr: errors.New("systemctl missing")}
+// HealthCheck 失败不再挡住启用:模块照常启用并启动,只把健康状态记成降级(ok=false + reason)。
+func TestEnableHealthCheckDegradedButEnabled(t *testing.T) {
+	m := &startStopModule{fakeModule: fakeModule{id: "svc"}, healthErr: errors.New("systemctl not found")}
 	mgr, st := newManager(t, m)
 	defer st.Close()
-	err := mgr.Enable("svc")
-	if err == nil {
-		t.Fatal("Enable should fail when HealthCheck fails")
+	if err := mgr.Enable("svc"); err != nil {
+		t.Fatalf("Enable should succeed despite failed health check: %v", err)
 	}
-	// HealthCheck 失败原因对用户可见、可操作 → 必须是 ValidationError 且携带原文。
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
-		t.Fatalf("HealthCheck failure should be a *ValidationError, got %T: %v", err, err)
+	if !mgr.IsEnabled("svc") {
+		t.Error("module should be enabled even with failed health check")
 	}
-	if !strings.Contains(ve.Msg, "systemctl missing") {
-		t.Errorf("HealthCheck reason should be carried in message, got %q", ve.Msg)
+	if !m.started {
+		t.Error("module should be started even with failed health check")
+	}
+	enabled, _ := st.EnabledModules()
+	if !enabled["svc"] {
+		t.Error("enabled state should persist despite failed health check")
+	}
+	h := mgr.Health("svc")
+	if h.OK {
+		t.Error("health.OK should be false after failed health check")
+	}
+	if h.Reason != "systemctl not found" {
+		t.Errorf("health.Reason = %q, want %q", h.Reason, "systemctl not found")
+	}
+}
+
+func TestEnableHealthyRecordsOK(t *testing.T) {
+	m := &startStopModule{fakeModule: fakeModule{id: "svc"}}
+	mgr, st := newManager(t, m)
+	defer st.Close()
+	if err := mgr.Enable("svc"); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if h := mgr.Health("svc"); !h.OK || h.Reason != "" {
+		t.Errorf("healthy module should have OK=true reason=\"\", got %+v", h)
+	}
+}
+
+// Start 失败仍是真错误:拒绝启用并回滚(HealthCheck 降级不影响这条)。
+func TestEnableStartFailureStillRejected(t *testing.T) {
+	m := &startFailModule{fakeModule: fakeModule{id: "svc"}}
+	mgr, st := newManager(t, m)
+	defer st.Close()
+	if err := mgr.Enable("svc"); err == nil {
+		t.Error("Enable should fail when Start fails")
 	}
 	if mgr.IsEnabled("svc") {
-		t.Error("module must not be enabled after failed health check")
+		t.Error("module must not be enabled after Start failure")
+	}
+	enabled, _ := st.EnabledModules()
+	if enabled["svc"] {
+		t.Error("enabled state must not persist after Start failure")
 	}
 }
 
