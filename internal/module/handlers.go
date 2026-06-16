@@ -9,11 +9,12 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// moduleView 是 /api/modules 列表项:元信息 + 当前启用态 + 导航。
+// moduleView 是 /api/modules 列表项:元信息 + 当前启用态 + 导航 + 健康状态。
 type moduleView struct {
 	ModuleMeta
 	Enabled bool      `json:"enabled"`
 	Nav     []NavItem `json:"nav"`
+	Health  Health    `json:"health"`
 }
 
 // ModuleAPI 返回模块管理路由:列表对任意已认证角色开放,启用/停用要求 admin。
@@ -36,6 +37,7 @@ func ModuleAPI(reg *Registry, mgr *Manager, principal func(*http.Request) (int64
 				ModuleMeta: meta,
 				Enabled:    mgr.IsEnabled(meta.ID),
 				Nav:        nav,
+				Health:     mgr.Health(meta.ID),
 			})
 		}
 		writeJSON(w, http.StatusOK, views)

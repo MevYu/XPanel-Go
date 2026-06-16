@@ -14,17 +14,26 @@ type ValidationError struct{ Msg string }
 
 func (e *ValidationError) Error() string { return e.Msg }
 
-// Manager 编排模块启用/停用:依赖校验、健康检查、Start/Stop、状态持久化与重启恢复。
+// Health 是模块依赖自检的咨询结果:OK=true 表示依赖就绪;OK=false 时 Reason 给出原因
+// (如 "systemctl not found")。健康与否不影响模块能否启用,只用于前端状态提示。
+type Health struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason"`
+}
+
+// Manager 编排模块启用/停用:依赖校验、Start/Stop、状态持久化与重启恢复。
+// HealthCheck 仅作咨询:失败也允许启用,结果记入 health 供前端提示。
 type Manager struct {
 	reg   *Registry
 	store *store.Store
 
 	mu      sync.RWMutex
 	enabled map[string]bool
+	health  map[string]Health // 启用时记录的最近一次 HealthCheck 结果
 }
 
 func NewManager(reg *Registry, st *store.Store) *Manager {
-	return &Manager{reg: reg, store: st, enabled: make(map[string]bool)}
+	return &Manager{reg: reg, store: st, enabled: make(map[string]bool), health: make(map[string]Health)}
 }
 
 func (mgr *Manager) IsEnabled(id string) bool {
@@ -33,7 +42,32 @@ func (mgr *Manager) IsEnabled(id string) bool {
 	return mgr.enabled[id]
 }
 
-// Enable 校验依赖 → HealthCheck → Start → 持久化。任一步失败则不改变状态。
+// Health 返回模块的健康状态。已启用模块返回启用时记录的结果;未记录(未启用)则现算一次
+// HealthCheck(通常很快,如 LookPath)。未知 id 返回零值(OK=false, Reason="")。
+func (mgr *Manager) Health(id string) Health {
+	mgr.mu.RLock()
+	h, recorded := mgr.health[id]
+	mgr.mu.RUnlock()
+	if recorded {
+		return h
+	}
+	m, ok := mgr.reg.Get(id)
+	if !ok {
+		return Health{}
+	}
+	return checkHealth(m)
+}
+
+// checkHealth 跑模块 HealthCheck 并归一为咨询结果。
+func checkHealth(m Module) Health {
+	if err := m.HealthCheck(); err != nil {
+		return Health{OK: false, Reason: err.Error()}
+	}
+	return Health{OK: true}
+}
+
+// Enable 校验依赖 → 记录 HealthCheck(咨询,不挡)→ Start → 持久化。
+// 依赖未满足或 Start 失败则拒绝;HealthCheck 失败只记入 health,启用照常成功。
 func (mgr *Manager) Enable(id string) error {
 	m, ok := mgr.reg.Get(id)
 	if !ok {
@@ -49,9 +83,7 @@ func (mgr *Manager) Enable(id string) error {
 			return &ValidationError{Msg: fmt.Sprintf("module %q requires %q to be enabled first", id, dep)}
 		}
 	}
-	if err := m.HealthCheck(); err != nil {
-		return fmt.Errorf("module %q health check failed: %w", id, err)
-	}
+	health := checkHealth(m)
 	if err := m.Start(context.Background()); err != nil {
 		return fmt.Errorf("module %q start failed: %w", id, err)
 	}
@@ -60,6 +92,7 @@ func (mgr *Manager) Enable(id string) error {
 		return errors.Join(err, m.Stop(context.Background()))
 	}
 	mgr.enabled[id] = true
+	mgr.health[id] = health
 	return nil
 }
 
