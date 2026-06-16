@@ -27,6 +27,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的备份模块。
@@ -141,7 +142,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "backup.settings.update", "", clientIP(r))
+	m.deps.Audit(&uid, "backup.settings.update", "", m.clientIP(r))
 	s, _ := m.bs.settings()
 	writeJSON(w, http.StatusOK, s)
 }
@@ -194,7 +195,7 @@ func (m *Module) handleAddRemote(w http.ResponseWriter, r *http.Request) {
 			log.Printf("backup: rclone config create %q failed: %v", saved.Name, cerr)
 		}
 	}
-	m.deps.Audit(&uid, "backup.remote.add", saved.Name, clientIP(r))
+	m.deps.Audit(&uid, "backup.remote.add", saved.Name, m.clientIP(r))
 	writeJSON(w, http.StatusCreated, saved)
 }
 
@@ -217,7 +218,7 @@ func (m *Module) handleDeleteRemote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = m.rc.configDelete(rem.Name)
-	m.deps.Audit(&uid, "backup.remote.delete", rem.Name, clientIP(r))
+	m.deps.Audit(&uid, "backup.remote.delete", rem.Name, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -286,7 +287,7 @@ func (m *Module) handleAddJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "add job failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "backup.job.add", saved.Name, clientIP(r))
+	m.deps.Audit(&uid, "backup.job.add", saved.Name, m.clientIP(r))
 	writeJSON(w, http.StatusCreated, saved)
 }
 
@@ -307,7 +308,7 @@ func (m *Module) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "backup.job.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "backup.job.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -342,7 +343,7 @@ func (m *Module) handlePrune(w http.ResponseWriter, r *http.Request) {
 			removed++
 		}
 	}
-	m.deps.Audit(&uid, "backup.job.prune", fmt.Sprintf("%s removed=%d", job.Name, removed), clientIP(r))
+	m.deps.Audit(&uid, "backup.job.prune", fmt.Sprintf("%s removed=%d", job.Name, removed), m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]int{"removed": removed})
 }
 
@@ -407,7 +408,7 @@ func (m *Module) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backup failed: "+safeErr(err), http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "backup.run", fmt.Sprintf("%s:%s -> %s", kind, target, rec.Filename), clientIP(r))
+	m.deps.Audit(&uid, "backup.run", fmt.Sprintf("%s:%s -> %s", kind, target, rec.Filename), m.clientIP(r))
 	writeJSON(w, http.StatusCreated, rec)
 }
 
@@ -536,7 +537,7 @@ func (m *Module) handleRestore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "restore failed: "+safeErr(err), http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "backup.restore", fmt.Sprintf("%s -> %s", rec.Filename, restoreDest.Dest), clientIP(r))
+	m.deps.Audit(&uid, "backup.restore", fmt.Sprintf("%s -> %s", rec.Filename, restoreDest.Dest), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -568,7 +569,7 @@ func (m *Module) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "backup.record.delete", rec.Filename, clientIP(r))
+	m.deps.Audit(&uid, "backup.record.delete", rec.Filename, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -617,7 +618,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

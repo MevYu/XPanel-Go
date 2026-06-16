@@ -15,7 +15,7 @@ import (
 
 func TestIPBanMiddlewareRejectsBannedIP(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	h := IPBanMiddleware(func(ip string) bool { return ip == "1.2.3.4" })(ok)
+	h := IPBanMiddleware(func(ip string) bool { return ip == "1.2.3.4" }, remoteIP)(ok)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/anything", nil)
@@ -81,7 +81,7 @@ func TestLoginFailuresBanIPAcrossAllEndpoints(t *testing.T) {
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, "/")
+	h := NewWithModules(svc, jm, reg, mgr, nil, guard.Banned, nil, "/")
 
 	login := func() int {
 		rec := httptest.NewRecorder()

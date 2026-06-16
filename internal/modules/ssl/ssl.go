@@ -29,6 +29,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string)
 	Audit     func(userID *int64, action, detail, ip string)
+	ClientIP  func(*http.Request) string // 取真实客户端 IP(受信代理感知)
 }
 
 // 设置键与默认值。证书/账户目录与 aaPanel 习惯对齐。
@@ -168,7 +169,7 @@ func (m *Module) handleIssue(w http.ResponseWriter, r *http.Request) {
 	if issueErr != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "ssl.issue", primary+" "+string(ch)+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "ssl.issue", primary+" "+string(ch)+" "+outcome, m.clientIP(r))
 	if issueErr != nil {
 		log.Printf("ssl: issue %s failed: %v", primary, issueErr)
 		http.Error(w, "issue failed", http.StatusInternalServerError)
@@ -251,7 +252,7 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upload recorded failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "ssl.upload", primary, clientIP(r))
+	m.deps.Audit(&uid, "ssl.upload", primary, m.clientIP(r))
 	c, _ := m.ss.get(id)
 	writeJSON(w, http.StatusCreated, c)
 }
@@ -280,7 +281,7 @@ func (m *Module) handleRenew(w http.ResponseWriter, r *http.Request) {
 	if renewErr != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "ssl.renew", domains[0]+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "ssl.renew", domains[0]+" "+outcome, m.clientIP(r))
 	if renewErr != nil {
 		log.Printf("ssl: renew %s failed: %v", domains[0], renewErr)
 		http.Error(w, "renew failed", http.StatusInternalServerError)
@@ -311,7 +312,7 @@ func (m *Module) handleAutoRenew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "ssl.auto", strconv.FormatInt(id, 10)+" "+chi.URLParamFromCtx(r.Context(), "verb"), clientIP(r))
+	m.deps.Audit(&uid, "ssl.auto", strconv.FormatInt(id, 10)+" "+chi.URLParamFromCtx(r.Context(), "verb"), m.clientIP(r))
 	c, _ := m.ss.get(id)
 	writeJSON(w, http.StatusOK, c)
 }
@@ -339,7 +340,7 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	// 删除落盘文件(best-effort);失败仅记日志,记录已删。
 	_ = os.Remove(c.CertPath)
 	_ = os.Remove(c.KeyPath)
-	m.deps.Audit(&uid, "ssl.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "ssl.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -371,7 +372,7 @@ func (m *Module) handleRenewDue(w http.ResponseWriter, r *http.Request) {
 		_ = m.ss.markRenewed(c.ID, readExpiry(c.CertPath))
 		renewed++
 	}
-	m.deps.Audit(&uid, "ssl.renew-due", strconv.Itoa(renewed)+" ok "+strconv.Itoa(failed)+" failed", clientIP(r))
+	m.deps.Audit(&uid, "ssl.renew-due", strconv.Itoa(renewed)+" ok "+strconv.Itoa(failed)+" failed", m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]int{"renewed": renewed, "failed": failed})
 }
 
@@ -437,7 +438,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "ssl.settings", "updated", clientIP(r))
+	m.deps.Audit(&uid, "ssl.settings", "updated", m.clientIP(r))
 	m.handleGetSettings(w, r)
 }
 
@@ -546,7 +547,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

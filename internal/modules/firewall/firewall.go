@@ -16,6 +16,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的防火墙管理模块:抽象 ufw/firewalld 后端,管端口规则与启停。
@@ -95,7 +96,7 @@ func (m *Module) applyRule(w http.ResponseWriter, r *http.Request, add bool, act
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, action, rule.Action+"/"+rule.Proto+"/"+strconv.Itoa(rule.Port)+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, action, rule.Action+"/"+rule.Proto+"/"+strconv.Itoa(rule.Port)+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("firewall: apply rule failed: %v", err)
 		http.Error(w, "firewall operation failed", http.StatusInternalServerError)
@@ -133,7 +134,7 @@ func (m *Module) setEnabled(w http.ResponseWriter, r *http.Request, enable, dang
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, action, outcome, clientIP(r))
+	m.deps.Audit(&uid, action, outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("firewall: set enabled=%v failed: %v", enable, err)
 		http.Error(w, "firewall operation failed", http.StatusInternalServerError)
@@ -154,8 +155,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

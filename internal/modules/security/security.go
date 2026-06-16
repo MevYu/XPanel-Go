@@ -20,6 +20,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的安全加固模块。ssh/f2b/loglib 三个后端可注入,便于 mock 测。
@@ -126,7 +127,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "security.settings.update", "paths updated", clientIP(r))
+	m.deps.Audit(&uid, "security.settings.update", "paths updated", m.clientIP(r))
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -183,7 +184,7 @@ func (m *Module) handleSSHDSet(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "security.sshd.set", req.Key+"="+req.Value+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "security.sshd.set", req.Key+"="+req.Value+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("security: set sshd %s failed: %v", req.Key, err)
 		http.Error(w, "sshd_config update failed", http.StatusInternalServerError)
@@ -204,7 +205,7 @@ func (m *Module) handleSSHDReload(w http.ResponseWriter, r *http.Request) {
 	}
 	// reload 前再校验一次,坏配置绝不重载。
 	if err := m.ssh.Validate(st.SSHDConfigPath); err != nil {
-		m.deps.Audit(&uid, "security.sshd.reload", "validate failed", clientIP(r))
+		m.deps.Audit(&uid, "security.sshd.reload", "validate failed", m.clientIP(r))
 		http.Error(w, "sshd config validation failed", http.StatusConflict)
 		return
 	}
@@ -213,7 +214,7 @@ func (m *Module) handleSSHDReload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "security.sshd.reload", outcome, clientIP(r))
+	m.deps.Audit(&uid, "security.sshd.reload", outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("security: reload sshd failed: %v", err)
 		http.Error(w, "sshd reload failed", http.StatusInternalServerError)
@@ -273,7 +274,7 @@ func (m *Module) handleKeysAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to persist key", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "security.key.add", req.Comment, clientIP(r))
+	m.deps.Audit(&uid, "security.key.add", req.Comment, m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
 }
 
@@ -306,7 +307,7 @@ func (m *Module) handleKeysDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete key", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "security.key.delete", key.Comment, clientIP(r))
+	m.deps.Audit(&uid, "security.key.delete", key.Comment, m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -378,7 +379,7 @@ func (m *Module) handleF2bUnban(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "security.fail2ban.unban", req.Jail+"/"+req.IP+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "security.fail2ban.unban", req.Jail+"/"+req.IP+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("security: fail2ban unban failed: %v", err)
 		http.Error(w, "fail2ban operation failed", http.StatusInternalServerError)
@@ -420,7 +421,7 @@ func (m *Module) handleF2bJail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, action, req.Jail+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, action, req.Jail+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("security: fail2ban jail %s failed: %v", req.Jail, err)
 		http.Error(w, "fail2ban operation failed", http.StatusInternalServerError)
@@ -477,8 +478,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

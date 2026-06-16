@@ -21,6 +21,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的网站防火墙模块。
@@ -111,7 +112,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "save settings", err)
 		return
 	}
-	m.deps.Audit(&uid, "waf.settings.update", s.ConfigDir, clientIP(r))
+	m.deps.Audit(&uid, "waf.settings.update", s.ConfigDir, m.clientIP(r))
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -148,7 +149,7 @@ func (m *Module) handleCreateIP(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "create ip", err)
 		return
 	}
-	m.deps.Audit(&uid, "waf.ip.create", rule.Action+" "+rule.CIDR, clientIP(r))
+	m.deps.Audit(&uid, "waf.ip.create", rule.Action+" "+rule.CIDR, m.clientIP(r))
 	rule.ID = id
 	writeJSON(w, http.StatusCreated, rule)
 }
@@ -171,7 +172,7 @@ func (m *Module) handleDeleteIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rule not found", http.StatusNotFound)
 		return
 	}
-	m.deps.Audit(&uid, "waf.ip.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "waf.ip.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -207,7 +208,7 @@ func (m *Module) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "create match", err)
 		return
 	}
-	m.deps.Audit(&uid, "waf.match.create", rule.Target+" "+rule.Action, clientIP(r))
+	m.deps.Audit(&uid, "waf.match.create", rule.Target+" "+rule.Action, m.clientIP(r))
 	rule.ID = id
 	writeJSON(w, http.StatusCreated, rule)
 }
@@ -230,7 +231,7 @@ func (m *Module) handleDeleteMatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rule not found", http.StatusNotFound)
 		return
 	}
-	m.deps.Audit(&uid, "waf.match.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "waf.match.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -262,7 +263,7 @@ func (m *Module) handlePutCC(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "save cc", err)
 		return
 	}
-	m.deps.Audit(&uid, "waf.cc.update", "enabled="+strconv.FormatBool(cc.Enabled), clientIP(r))
+	m.deps.Audit(&uid, "waf.cc.update", "enabled="+strconv.FormatBool(cc.Enabled), m.clientIP(r))
 	writeJSON(w, http.StatusOK, cc)
 }
 
@@ -319,7 +320,7 @@ func (m *Module) handleApply(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "waf.apply", outcome, clientIP(r))
+	m.deps.Audit(&uid, "waf.apply", outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("waf: apply failed: %v", err)
 		// 把 nginx 输出回传给调用方排障(已通过 admin 鉴权)。
@@ -376,8 +377,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

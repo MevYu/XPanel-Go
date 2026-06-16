@@ -23,6 +23,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的监控告警模块。
@@ -179,7 +180,7 @@ func (m *Module) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "create failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "alert.rule.create", rule.Name, clientIP(r))
+	m.deps.Audit(&uid, "alert.rule.create", rule.Name, m.clientIP(r))
 	out, _ := m.ss.getRule(id)
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -219,7 +220,7 @@ func (m *Module) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "alert.rule.update", rule.Name, clientIP(r))
+	m.deps.Audit(&uid, "alert.rule.update", rule.Name, m.clientIP(r))
 	out, _ := m.ss.getRule(id)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -238,7 +239,7 @@ func (m *Module) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "alert.rule.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "alert.rule.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -281,7 +282,7 @@ func (m *Module) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 审计不含凭证:只记名称与类型。
-	m.deps.Audit(&uid, "alert.channel.create", c.Name+" ("+string(c.Kind)+")", clientIP(r))
+	m.deps.Audit(&uid, "alert.channel.create", c.Name+" ("+string(c.Kind)+")", m.clientIP(r))
 	out, _ := m.ss.getChannel(id)
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -317,7 +318,7 @@ func (m *Module) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "alert.channel.update", c.Name+" ("+string(c.Kind)+")", clientIP(r))
+	m.deps.Audit(&uid, "alert.channel.update", c.Name+" ("+string(c.Kind)+")", m.clientIP(r))
 	out, _ := m.ss.getChannel(id)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -336,7 +337,7 @@ func (m *Module) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "alert.channel.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "alert.channel.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -372,7 +373,7 @@ func (m *Module) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	if sendErr != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "alert.channel.test", ch.Name+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "alert.channel.test", ch.Name+" "+outcome, m.clientIP(r))
 	if sendErr != nil {
 		// 不回显底层错误明细:可能含凭证片段。
 		log.Printf("alert: test channel %d failed: %v", id, sendErr)
@@ -431,7 +432,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "alert.settings", "interval="+itoa(set.IntervalSec)+" silence="+itoa(set.SilenceSec), clientIP(r))
+	m.deps.Audit(&uid, "alert.settings", "interval="+itoa(set.IntervalSec)+" silence="+itoa(set.SilenceSec), m.clientIP(r))
 	writeJSON(w, http.StatusOK, set)
 }
 
@@ -479,8 +480,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

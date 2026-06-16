@@ -24,6 +24,7 @@ var errInstallUnavailable = errors.New("php: install backend unavailable in this
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的 PHP 多版本管理模块。
@@ -131,7 +132,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "save settings", err)
 		return
 	}
-	m.deps.Audit(&uid, "php.settings.update", s.InstallBase, clientIP(r))
+	m.deps.Audit(&uid, "php.settings.update", s.InstallBase, m.clientIP(r))
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -185,7 +186,7 @@ func (m *Module) handleInstall(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "php.install", body.Version+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "php.install", body.Version+" "+outcome, m.clientIP(r))
 	if err != nil {
 		// out 含命令原始输出(路径/内部状态),只留服务端,不回传客户端。
 		log.Printf("php: install %q failed: %v; output: %s", body.Version, err, out)
@@ -259,7 +260,7 @@ func (m *Module) handlePutIni(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "write ini", err)
 		return
 	}
-	m.deps.Audit(&uid, "php.ini.update", version+" "+strings.Join(keys(changes), ","), clientIP(r))
+	m.deps.Audit(&uid, "php.ini.update", version+" "+strings.Join(keys(changes), ","), m.clientIP(r))
 	writeJSON(w, http.StatusOK, parseIni(updated))
 }
 
@@ -312,7 +313,7 @@ func (m *Module) handleToggleExtension(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "toggle extension", err)
 		return
 	}
-	m.deps.Audit(&uid, "php.ext."+op, version+" "+ext, clientIP(r))
+	m.deps.Audit(&uid, "php.ext."+op, version+" "+ext, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -360,7 +361,7 @@ func (m *Module) handleFpmAction(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "php.fpm."+verb, unit+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "php.fpm."+verb, unit+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("php: fpm %s for %q failed: %v", verb, unit, err)
 		http.Error(w, "fpm operation failed", http.StatusInternalServerError)
@@ -406,8 +407,11 @@ func keys(m map[string]string) []string {
 	return out
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

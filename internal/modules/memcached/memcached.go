@@ -20,6 +20,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的 Memcached 缓存管理模块。
@@ -141,7 +142,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "save settings", err)
 		return
 	}
-	m.deps.Audit(&uid, "memcached.settings.update", s.Addr, clientIP(r))
+	m.deps.Audit(&uid, "memcached.settings.update", s.Addr, m.clientIP(r))
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -163,7 +164,7 @@ func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "memcached."+verb, set.ServiceUnit+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "memcached."+verb, set.ServiceUnit+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("memcached: %s for %q failed: %v", verb, set.ServiceUnit, err)
 		http.Error(w, "service operation failed", http.StatusInternalServerError)
@@ -194,7 +195,7 @@ func (m *Module) handleFlush(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "memcached.flush_all", set.Addr+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "memcached.flush_all", set.Addr+" "+outcome, m.clientIP(r))
 	if err != nil {
 		connError(w, err)
 		return
@@ -231,8 +232,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

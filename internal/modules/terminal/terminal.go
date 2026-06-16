@@ -26,6 +26,7 @@ const (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是 Web 终端模块:短时票据换取 WS,WS 桥接到 PTY 里的 shell。
@@ -92,7 +93,7 @@ func (m *Module) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	c.SetReadLimit(wsReadLimit)
 
-	ip := clientIP(r)
+	ip := m.clientIP(r)
 	uid := sess.userID
 	m.deps.Audit(&uid, "terminal.open", "session start", ip)
 	defer m.deps.Audit(&uid, "terminal.close", "session end", ip)
@@ -202,8 +203,11 @@ func wsReadErr(err error) error {
 	return err
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

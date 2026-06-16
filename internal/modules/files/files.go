@@ -31,6 +31,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string)
 	Audit     func(userID *int64, action, detail, ip string)
+	ClientIP  func(*http.Request) string // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是文件管理 + 外链分享模块。
@@ -131,7 +132,7 @@ func (m *Module) resolve(rel string) (string, error) {
 
 func (m *Module) audit(r *http.Request, action, detail string) {
 	uid, _ := m.deps.Principal(r)
-	m.deps.Audit(&uid, action, detail, clientIP(r))
+	m.deps.Audit(&uid, action, detail, m.clientIP(r))
 }
 
 // ---- 只读操作 ----
@@ -490,7 +491,7 @@ func (m *Module) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "create share failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "files.share.create", req.Path+" token="+tok, clientIP(r))
+	m.deps.Audit(&uid, "files.share.create", req.Path+" token="+tok, m.clientIP(r))
 	writeJSON(w, http.StatusCreated, toShareResp(sh, tok))
 }
 
@@ -520,7 +521,7 @@ func (m *Module) handleShareRevoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	m.deps.Audit(&uid, "files.share.revoke", "token="+token, clientIP(r))
+	m.deps.Audit(&uid, "files.share.revoke", "token="+token, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -576,7 +577,11 @@ func fsError(w http.ResponseWriter, err error) {
 	http.Error(w, "filesystem error", http.StatusInternalServerError)
 }
 
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

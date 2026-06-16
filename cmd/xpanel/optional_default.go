@@ -13,6 +13,7 @@ import (
 type optionalDeps struct {
 	Principal func(*http.Request) (userID int64, role string)
 	Audit     func(userID *int64, action, detail, ip string)
+	ClientIP  func(*http.Request) string
 }
 
 // registerOptionalModules 默认构建不含任何 build-tag 门控的可选模块。

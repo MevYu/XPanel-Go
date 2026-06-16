@@ -23,6 +23,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的木马查杀模块。
@@ -115,7 +116,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "malscan.settings", s.ScanDir, clientIP(r))
+	m.deps.Audit(&uid, "malscan.settings", s.ScanDir, m.clientIP(r))
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -169,7 +170,7 @@ func (m *Module) handleScan(w http.ResponseWriter, r *http.Request) {
 	if err := m.ms.finishTask(taskID, status, rep, errStr); err != nil {
 		log.Printf("malscan: finish task: %v", err)
 	}
-	m.deps.Audit(&uid, "malscan.scan", root+" flagged="+strconv.Itoa(len(rep.Flagged)), clientIP(r))
+	m.deps.Audit(&uid, "malscan.scan", root+" flagged="+strconv.Itoa(len(rep.Flagged)), m.clientIP(r))
 
 	task, _ := m.ms.listTaskByID(taskID)
 	writeJSON(w, http.StatusOK, task)
@@ -257,7 +258,7 @@ func (m *Module) handleQuarantineFile(w http.ResponseWriter, r *http.Request) {
 		log.Printf("malscan: record quarantine: %v", err)
 	}
 	_ = m.ms.markQuarantined(abs, true)
-	m.deps.Audit(&uid, "malscan.quarantine", abs, clientIP(r))
+	m.deps.Audit(&uid, "malscan.quarantine", abs, m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{"orig_path": abs, "stored_path": stored})
 }
 
@@ -298,7 +299,7 @@ func (m *Module) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = m.ms.markRestored(q.ID)
 	_ = m.ms.markQuarantined(abs, false)
-	m.deps.Audit(&uid, "malscan.restore", abs, clientIP(r))
+	m.deps.Audit(&uid, "malscan.restore", abs, m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{"restored": abs})
 }
 
@@ -316,7 +317,7 @@ func (m *Module) handleAddWhitelist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "malscan.whitelist.add", abs, clientIP(r))
+	m.deps.Audit(&uid, "malscan.whitelist.add", abs, m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{"whitelisted": abs})
 }
 
@@ -334,7 +335,7 @@ func (m *Module) handleDelWhitelist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "malscan.whitelist.del", abs, clientIP(r))
+	m.deps.Audit(&uid, "malscan.whitelist.del", abs, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -420,8 +421,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

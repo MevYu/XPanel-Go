@@ -20,6 +20,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的数据库管理模块。
@@ -212,7 +213,7 @@ func (m *Module) handler(d dialect, k opKind) http.HandlerFunc {
 			outcome = "failed"
 		}
 		if k.write() {
-			m.deps.Audit(&uid, m.engineName(d)+"."+k.action(), opDetail(k, req)+" "+outcome, clientIP(r))
+			m.deps.Audit(&uid, m.engineName(d)+"."+k.action(), opDetail(k, req)+" "+outcome, m.clientIP(r))
 		}
 		if err != nil {
 			log.Printf("database: %s %s failed: %v", m.engineName(d), k.action(), err)
@@ -382,7 +383,7 @@ func (m *Module) handleRedisFlush(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "redis.flushdb", outcome, clientIP(r))
+	m.deps.Audit(&uid, "redis.flushdb", outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("database: redis flushdb failed: %v", err)
 		http.Error(w, "redis operation failed", http.StatusBadGateway)
@@ -423,7 +424,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "database.settings.update", "", clientIP(r))
+	m.deps.Audit(&uid, "database.settings.update", "", m.clientIP(r))
 	eff, passSet, err := m.ss.masked()
 	if err != nil {
 		http.Error(w, "settings unavailable", http.StatusInternalServerError)
@@ -441,8 +442,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

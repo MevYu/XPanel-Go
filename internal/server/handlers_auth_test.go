@@ -60,7 +60,7 @@ func loginServerWithTOTP(t *testing.T, totp loginTOTPVerifier) http.Handler {
 	jm := auth.NewJWTManager([]byte("test-secret-32-bytes-long-xxxxxx"))
 	svc := auth.NewService(st, jm, auth.NewLockout(3, time.Minute, time.Now))
 	svc.Register("admin", "pw-123456", "admin")
-	ah := &authHandlers{svc: svc, totp: totp}
+	ah := &authHandlers{svc: svc, totp: totp, clientIP: remoteIP}
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", ah.login)
 	return r

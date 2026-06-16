@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -94,3 +95,39 @@ func TestLoadRejectsInvalidSecret(t *testing.T) {
 		t.Error("Load should reject empty/invalid jwt_secret")
 	}
 }
+
+func TestParseTrustedProxies(t *testing.T) {
+	t.Run("empty -> nil", func(t *testing.T) {
+		nets, err := Config{}.ParseTrustedProxies()
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if nets != nil {
+			t.Fatalf("want nil, got %v", nets)
+		}
+	})
+	t.Run("CIDR and bare IP", func(t *testing.T) {
+		c := Config{TrustedProxies: []string{"10.0.0.0/8", "192.168.1.1", "::1"}}
+		nets, err := c.ParseTrustedProxies()
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if len(nets) != 3 {
+			t.Fatalf("want 3 nets, got %d", len(nets))
+		}
+		if !nets[1].Contains(netParse("192.168.1.1")) {
+			t.Error("bare IPv4 should match itself")
+		}
+		if nets[1].Contains(netParse("192.168.1.2")) {
+			t.Error("bare IPv4 should not match neighbor (must be /32)")
+		}
+	})
+	t.Run("invalid entry errors", func(t *testing.T) {
+		_, err := Config{TrustedProxies: []string{"not-an-ip"}}.ParseTrustedProxies()
+		if err == nil {
+			t.Fatal("want error for invalid entry")
+		}
+	})
+}
+
+func netParse(s string) net.IP { return net.ParseIP(s) }

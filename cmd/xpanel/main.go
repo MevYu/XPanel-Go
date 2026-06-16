@@ -98,27 +98,38 @@ func main() {
 		_ = st.WriteAudit(userID, action, detail, ip)
 	}
 
+	trustedProxies, err := cfg.ParseTrustedProxies()
+	if err != nil {
+		log.Fatalf("trusted_proxies: %v", err)
+	}
+	clientIP := func(r *http.Request) string { return server.ExtractClientIP(r, trustedProxies) }
+
 	reg := module.NewRegistry()
 	reg.Register(dashboard.New())
 	reg.Register(service.New(service.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(cron.New(st, cron.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(firewall.New(firewall.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(terminal.New(terminal.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	filesMod, err := files.New("", st, files.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	})
 	if err != nil {
 		log.Fatalf("files module: %v", err)
@@ -127,108 +138,134 @@ func main() {
 	reg.Register(database.New(cfg.JWTSecret, st, database.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(sites.New(st, sites.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(ssl.New(st, nil, ssl.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(supervisor.New(st, supervisor.NewController(), supervisor.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(waf.New(st, waf.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(malscan.New(st, malscan.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(docker.New(st, docker.NewRunner(), docker.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(users.New(st, cfg.JWTSecret, users.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(ftp.New(st, nil, ftp.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(backup.New(cfg.JWTSecret, st, backup.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(php.New(st, nil, nil, php.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(nodejs.New(st, nodejs.NewSupervisorManager(), nodejs.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(python.New(st, python.NewProvisioner(), func(s python.Settings) python.Runner {
 		return python.NewSupervisorRunner(s.ConfDir, s.LogDir)
 	}, python.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(dns.New(cfg.JWTSecret, st, dns.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(security.New(st, nil, nil, nil, security.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(antitamper.New(st, antitamper.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(appstore.New(st, appstore.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(alert.New(cfg.JWTSecret, st, alert.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(java.New(st, java.NewSupervisorManager(), java.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(sitemonitor.New(st, nil, sitemonitor.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(migration.New(st, migration.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(mail.New(st, nil, mail.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(loadbalancer.New(st, loadbalancer.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(memcached.New(st, nil, memcached.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	reg.Register(mysqlrepl.New(cfg.JWTSecret, st, mysqlrepl.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	}))
 	registerOptionalModules(reg, st, optionalDeps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
+		ClientIP:  clientIP,
 	})
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
@@ -237,7 +274,7 @@ func main() {
 	loginTOTP := func(userID int64, code string) (enabled, ok bool, err error) {
 		return users.VerifyLoginTOTP(st, cfg.JWTSecret, userID, code)
 	}
-	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, cfg.NormalizedEntryPath())
+	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath())
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,

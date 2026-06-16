@@ -1,7 +1,6 @@
 package files
 
 import (
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -60,16 +59,15 @@ func (rl *rateLimiter) allow(ip string) bool {
 	return true
 }
 
-func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-		if !rl.allow(ip) {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// middleware 用 clientIP 提取限速 key(受信代理感知,与面板侧一致)。
+func (rl *rateLimiter) middleware(clientIP func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !rl.allow(clientIP(r)) {
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

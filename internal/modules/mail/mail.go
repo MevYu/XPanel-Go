@@ -25,6 +25,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的邮局管理模块。
@@ -217,7 +218,7 @@ func (m *Module) handleCreateMailbox(w http.ResponseWriter, r *http.Request) {
 	hash, err := m.be.hashPassword(r.Context(), req.Password)
 	if err != nil {
 		// 后端失败:不落库、不审计成功。仅记一次失败审计。
-		m.deps.Audit(&uid, "mail.mailbox.create", "address="+req.Address+" failed", clientIP(r))
+		m.deps.Audit(&uid, "mail.mailbox.create", "address="+req.Address+" failed", m.clientIP(r))
 		log.Printf("mail: hash password failed: %v", err)
 		http.Error(w, "mail backend password hashing failed", http.StatusBadGateway)
 		return
@@ -293,7 +294,7 @@ func (m *Module) handleMailboxPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := m.be.hashPassword(r.Context(), req.Password)
 	if err != nil {
-		m.deps.Audit(&uid, "mail.mailbox.password", "address="+address+" failed", clientIP(r))
+		m.deps.Audit(&uid, "mail.mailbox.password", "address="+address+" failed", m.clientIP(r))
 		log.Printf("mail: hash password failed: %v", err)
 		http.Error(w, "mail backend password hashing failed", http.StatusBadGateway)
 		return
@@ -444,7 +445,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "mail.settings.update", "", clientIP(r))
+	m.deps.Audit(&uid, "mail.settings.update", "", m.clientIP(r))
 	eff, err := m.ds.effective()
 	if err != nil {
 		http.Error(w, "settings unavailable", http.StatusInternalServerError)
@@ -546,7 +547,7 @@ func (m *Module) auditOutcome(uid int64, action, detail string, err error, r *ht
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, action, detail+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, action, detail+" "+outcome, m.clientIP(r))
 }
 
 // confirmed 检查危险操作的二次确认标记(与其它模块语义一致)。
@@ -562,8 +563,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

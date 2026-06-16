@@ -32,6 +32,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string)
 	Audit     func(userID *int64, action, detail, ip string)
+	ClientIP  func(*http.Request) string // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的应用商店模块。compose 副作用经 Compose 接口抽象(可注入 mock)。
@@ -190,7 +191,7 @@ func (m *Module) handleInstall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "persist failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "appstore.install", app.ID+" as "+name, clientIP(r))
+	m.deps.Audit(&uid, "appstore.install", app.ID+" as "+name, m.clientIP(r))
 	inst, _ := m.as.get(id)
 	writeJSON(w, http.StatusCreated, inst)
 }
@@ -229,7 +230,7 @@ func (m *Module) handleToggle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "persist failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "appstore."+verb, inst.Name, clientIP(r))
+	m.deps.Audit(&uid, "appstore."+verb, inst.Name, m.clientIP(r))
 	updated, _ := m.as.get(id)
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -272,7 +273,7 @@ func (m *Module) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	if removeVolumes {
 		detail += " (data deleted)"
 	}
-	m.deps.Audit(&uid, "appstore.uninstall", detail, clientIP(r))
+	m.deps.Audit(&uid, "appstore.uninstall", detail, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -352,7 +353,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "persist failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "appstore.settings.update", set.AppsRoot+" "+set.ProjectDir, clientIP(r))
+	m.deps.Audit(&uid, "appstore.settings.update", set.AppsRoot+" "+set.ProjectDir, m.clientIP(r))
 	writeJSON(w, http.StatusOK, set)
 }
 
@@ -392,8 +393,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

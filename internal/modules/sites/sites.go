@@ -26,6 +26,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string)
 	Audit     func(userID *int64, action, detail, ip string)
+	ClientIP  func(*http.Request) string // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的网站管理模块。nginx 副作用经 Nginx 接口抽象(可注入 mock)。
@@ -152,7 +153,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "persist failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "sites.create", v.Name+" ("+string(v.Kind)+")", clientIP(r))
+	m.deps.Audit(&uid, "sites.create", v.Name+" ("+string(v.Kind)+")", m.clientIP(r))
 	site, _ := m.ss.get(id)
 	writeJSON(w, http.StatusCreated, site)
 }
@@ -205,7 +206,7 @@ func (m *Module) handleEditConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "persist failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "sites.config.edit", site.Name, clientIP(r))
+	m.deps.Audit(&uid, "sites.config.edit", site.Name, m.clientIP(r))
 	updated, _ := m.ss.get(id)
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -251,7 +252,7 @@ func (m *Module) handleToggle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "persist failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "sites."+verb, site.Name, clientIP(r))
+	m.deps.Audit(&uid, "sites."+verb, site.Name, m.clientIP(r))
 	updated, _ := m.ss.get(id)
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -295,7 +296,7 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "sites.delete", site.Name, clientIP(r))
+	m.deps.Audit(&uid, "sites.delete", site.Name, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -329,7 +330,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "persist failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "sites.settings.update", set.WebRoot+" "+set.ConfDir, clientIP(r))
+	m.deps.Audit(&uid, "sites.settings.update", set.WebRoot+" "+set.ConfDir, m.clientIP(r))
 	writeJSON(w, http.StatusOK, set)
 }
 
@@ -390,8 +391,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

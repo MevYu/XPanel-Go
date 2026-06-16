@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -21,7 +22,7 @@ func New(svc *auth.Service, jwt *auth.JWTManager) http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	ah := &authHandlers{svc: svc}
+	ah := &authHandlers{svc: svc, clientIP: remoteIP}
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/login", ah.login)
 		r.Post("/refresh", ah.refresh)
@@ -53,22 +54,24 @@ type LoginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err er
 // NewWithModules 在基础路由上接入模块系统:模块管理 API + 各模块路由(带启用门)。
 // totp 为登录时的 2FA 校验器;传 nil 则不启用登录 2FA 门。
 // ipBanned 报告来源 IP 是否被封禁(传 nil 则不启用 IP 封禁门)。
+// trusted 为受信反代网段(来自 config.TrustedProxies);空=只信 RemoteAddr、忽略 XFF。
 // entryPath 为隐藏面板入口路径;SPA 只在此路径下提供,其余非 API/静态请求返回 404。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, entryPath string) http.Handler {
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string) http.Handler {
+	clientIP := clientIPFunc(trusted)
 	r := chi.NewRouter()
 	if ipBanned != nil {
-		r.Use(IPBanMiddleware(ipBanned)) // 最前面:被封 IP 的全部请求直接拒
+		r.Use(IPBanMiddleware(ipBanned, clientIP)) // 最前面:被封 IP 的全部请求直接拒
 	}
 	r.Use(EntryGate(entryPath))
 	r.Use(SecurityHeaders)
-	r.Use(NewRateLimiter(60).Middleware)
+	r.Use(NewRateLimiterWithClientIP(60, clientIP).Middleware)
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	ah := &authHandlers{svc: svc, totp: loginTOTPVerifier(totp)}
+	ah := &authHandlers{svc: svc, totp: loginTOTPVerifier(totp), clientIP: clientIP}
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/login", ah.login)
 		r.Post("/refresh", ah.refresh)

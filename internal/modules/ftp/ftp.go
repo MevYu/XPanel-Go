@@ -21,6 +21,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的 FTP 账户管理模块。
@@ -134,7 +135,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		outcome = "failed"
 	}
 	// 审计 detail 绝不含口令,仅用户名/路径/权限。
-	m.deps.Audit(&uid, "ftp.account.create", "user="+req.User+" home="+home+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "ftp.account.create", "user="+req.User+" home="+home+" "+outcome, m.clientIP(r))
 	if cerr != nil {
 		log.Printf("ftp: create %q failed: %v", req.User, cerr)
 		http.Error(w, "ftp account create failed", http.StatusBadGateway)
@@ -166,7 +167,7 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if derr != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "ftp.account.delete", "user="+user+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "ftp.account.delete", "user="+user+" "+outcome, m.clientIP(r))
 	if derr != nil {
 		log.Printf("ftp: delete %q failed: %v", user, derr)
 		http.Error(w, "ftp account delete failed", http.StatusBadGateway)
@@ -204,7 +205,7 @@ func (m *Module) handlePassword(w http.ResponseWriter, r *http.Request) {
 		outcome = "failed"
 	}
 	// detail 绝不含口令。
-	m.deps.Audit(&uid, "ftp.account.password", "user="+user+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "ftp.account.password", "user="+user+" "+outcome, m.clientIP(r))
 	if perr != nil {
 		log.Printf("ftp: passwd %q failed: %v", user, perr)
 		http.Error(w, "ftp password change failed", http.StatusBadGateway)
@@ -234,7 +235,7 @@ func (m *Module) handleToggle(w http.ResponseWriter, r *http.Request) {
 	if enable {
 		verb = "enable"
 	}
-	m.deps.Audit(&uid, "ftp.account."+verb, "user="+user+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "ftp.account."+verb, "user="+user+" "+outcome, m.clientIP(r))
 	if terr != nil {
 		log.Printf("ftp: %s %q failed: %v", verb, user, terr)
 		http.Error(w, "ftp account toggle failed", http.StatusBadGateway)
@@ -295,7 +296,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "ftp.settings.update", "", clientIP(r))
+	m.deps.Audit(&uid, "ftp.settings.update", "", m.clientIP(r))
 	eff, err := m.ss.effective()
 	if err != nil {
 		http.Error(w, "settings unavailable", http.StatusInternalServerError)
@@ -321,8 +322,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

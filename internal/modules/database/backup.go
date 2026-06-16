@@ -152,7 +152,7 @@ func (m *Module) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		outcome = "failed"
 		_ = os.Remove(dest)
 	}
-	m.deps.Audit(&uid, engine+".backup", "db="+name+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, engine+".backup", "db="+name+" "+outcome, m.clientIP(r))
 	if derr != nil {
 		log.Printf("database: backup %s %s failed: %v", engine, name, derr)
 		http.Error(w, "backup failed", http.StatusBadGateway)
@@ -206,7 +206,7 @@ func (m *Module) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, rec.Engine+".restore", "db="+rec.DBName+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, rec.Engine+".restore", "db="+rec.DBName+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("database: restore %s %s failed: %v", rec.Engine, rec.DBName, err)
 		http.Error(w, "restore failed", http.StatusBadGateway)
@@ -253,7 +253,7 @@ func (m *Module) handleBackupDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backup delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "database.backup.delete", "id="+strconv.FormatInt(rec.ID, 10), clientIP(r))
+	m.deps.Audit(&uid, "database.backup.delete", "id="+strconv.FormatInt(rec.ID, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 

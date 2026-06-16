@@ -26,6 +26,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的用户管理模块。
@@ -155,7 +156,7 @@ func (m *Module) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "create failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.create", req.Username+" role="+req.Role, clientIP(r))
+	m.deps.Audit(&uid, "users.create", req.Username+" role="+req.Role, m.clientIP(r))
 	writeJSON(w, http.StatusCreated, UserInfo{
 		ID: id, Username: req.Username, Role: req.Role,
 	})
@@ -192,7 +193,7 @@ func (m *Module) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "users.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -238,7 +239,7 @@ func (m *Module) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.set_role", strconv.FormatInt(id, 10)+" -> "+req.Role, clientIP(r))
+	m.deps.Audit(&uid, "users.set_role", strconv.FormatInt(id, 10)+" -> "+req.Role, m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "role": req.Role})
 }
 
@@ -284,7 +285,7 @@ func (m *Module) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "reset failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.reset_password", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "users.reset_password", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -325,7 +326,7 @@ func (m *Module) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "setup failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.2fa.setup", "", clientIP(r))
+	m.deps.Audit(&uid, "users.2fa.setup", "", m.clientIP(r))
 	writeJSON(w, http.StatusOK, totpSetupResponse{Secret: key.Secret(), OTPAuthURL: key.URL()})
 }
 
@@ -358,7 +359,7 @@ func (m *Module) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !totp.Validate(code, string(secret)) {
-		m.deps.Audit(&uid, "users.2fa.verify", "invalid", clientIP(r))
+		m.deps.Audit(&uid, "users.2fa.verify", "invalid", m.clientIP(r))
 		http.Error(w, "invalid code", http.StatusUnauthorized)
 		return
 	}
@@ -367,7 +368,7 @@ func (m *Module) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "verify failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.2fa.verify", "enabled", clientIP(r))
+	m.deps.Audit(&uid, "users.2fa.verify", "enabled", m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": true})
 }
 
@@ -379,7 +380,7 @@ func (m *Module) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "disable failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.2fa.disable", "", clientIP(r))
+	m.deps.Audit(&uid, "users.2fa.disable", "", m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 }
 
@@ -431,7 +432,7 @@ func (m *Module) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "create failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.apikey.create", strconv.FormatInt(id, 10)+" "+name, clientIP(r))
+	m.deps.Audit(&uid, "users.apikey.create", strconv.FormatInt(id, 10)+" "+name, m.clientIP(r))
 	writeJSON(w, http.StatusCreated, apiKeyCreateResponse{
 		APIKeyInfo: APIKeyInfo{ID: id, UserID: uid, Name: name},
 		Key:        plain,
@@ -454,7 +455,7 @@ func (m *Module) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "api key not found", http.StatusNotFound)
 		return
 	}
-	m.deps.Audit(&uid, "users.apikey.revoke", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "users.apikey.revoke", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -496,7 +497,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "write failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "users.settings.update", "totp_issuer="+issuer, clientIP(r))
+	m.deps.Audit(&uid, "users.settings.update", "totp_issuer="+issuer, m.clientIP(r))
 	writeJSON(w, http.StatusOK, settingsBody{TOTPIssuer: issuer})
 }
 
@@ -584,8 +585,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -22,6 +22,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的定时任务模块。
@@ -114,7 +115,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "crontab sync failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "cron.create", strconv.FormatInt(id, 10)+" "+req.Expr, clientIP(r))
+	m.deps.Audit(&uid, "cron.create", strconv.FormatInt(id, 10)+" "+req.Expr, m.clientIP(r))
 	job, _ := m.cs.get(id)
 	writeJSON(w, http.StatusCreated, job)
 }
@@ -149,7 +150,7 @@ func (m *Module) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "crontab sync failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "cron.update", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "cron.update", strconv.FormatInt(id, 10), m.clientIP(r))
 	job, _ := m.cs.get(id)
 	writeJSON(w, http.StatusOK, job)
 }
@@ -173,7 +174,7 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "crontab sync failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "cron.delete", strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "cron.delete", strconv.FormatInt(id, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -202,7 +203,7 @@ func (m *Module) handleToggle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "crontab sync failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "cron."+verb, strconv.FormatInt(id, 10), clientIP(r))
+	m.deps.Audit(&uid, "cron."+verb, strconv.FormatInt(id, 10), m.clientIP(r))
 	job, _ := m.cs.get(id)
 	writeJSON(w, http.StatusOK, job)
 }
@@ -275,8 +276,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

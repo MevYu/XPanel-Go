@@ -30,7 +30,7 @@ func (*Module) PublicPrefix() string { return "/s" }
 //   - GET /{token}/*          分享根下的子路径
 func (m *Module) PublicRoutes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(m.pubLim.middleware)
+	r.Use(m.pubLim.middleware(m.clientIP))
 	r.Get("/{token}", m.handlePublic)
 	r.Get("/{token}/*", m.handlePublic)
 	return r
@@ -169,7 +169,7 @@ func (m *Module) auditPublic(r *http.Request, action, token, detail string) {
 	if detail != "" {
 		d += " " + detail
 	}
-	m.deps.Audit(nil, action, d, clientIP(r))
+	m.deps.Audit(nil, action, d, m.clientIP(r))
 }
 
 func nowUnix() int64 { return time.Now().Unix() }

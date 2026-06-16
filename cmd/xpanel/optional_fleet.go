@@ -14,6 +14,7 @@ import (
 type optionalDeps struct {
 	Principal func(*http.Request) (userID int64, role string)
 	Audit     func(userID *int64, action, detail, ip string)
+	ClientIP  func(*http.Request) string
 }
 
 // registerOptionalModules 在 -tags fleet 时编入 fleet(集群)模块。
@@ -21,5 +22,6 @@ func registerOptionalModules(reg *module.Registry, st *store.Store, deps optiona
 	reg.Register(fleet.New(st, fleet.Deps{
 		Principal: deps.Principal,
 		Audit:     deps.Audit,
+		ClientIP:  deps.ClientIP,
 	}))
 }

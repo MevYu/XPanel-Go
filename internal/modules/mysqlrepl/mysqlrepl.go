@@ -20,6 +20,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的 MySQL 主从管理模块。
@@ -302,7 +303,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "mysqlrepl.settings.update", "", clientIP(r))
+	m.deps.Audit(&uid, "mysqlrepl.settings.update", "", m.clientIP(r))
 	eff, passSet, err := m.ss.masked()
 	if err != nil {
 		http.Error(w, "settings unavailable", http.StatusInternalServerError)
@@ -332,7 +333,7 @@ func (m *Module) audit(uid int64, action, detail string, r *http.Request, opErr 
 	if detail != "" {
 		detail += " "
 	}
-	m.deps.Audit(&uid, action, detail+outcome, clientIP(r))
+	m.deps.Audit(&uid, action, detail+outcome, m.clientIP(r))
 }
 
 // validPassword 校验复制口令非空且长度合理(不进审计 detail、不进日志)。
@@ -361,8 +362,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

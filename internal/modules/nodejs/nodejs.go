@@ -28,6 +28,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Settings 是可配置的路径与默认值,持久化在 nodejs_settings 表。
@@ -185,7 +186,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "apply process config failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "nodejs.create", req.Name, clientIP(r))
+	m.deps.Audit(&uid, "nodejs.create", req.Name, m.clientIP(r))
 	p, _ := m.ns.get(id)
 	writeJSON(w, http.StatusCreated, p)
 }
@@ -227,7 +228,7 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "nodejs.delete", p.Name, clientIP(r))
+	m.deps.Audit(&uid, "nodejs.delete", p.Name, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -301,7 +302,7 @@ func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "failed"
 	}
-	m.deps.Audit(&uid, "nodejs."+verb, p.Name+" "+outcome, clientIP(r))
+	m.deps.Audit(&uid, "nodejs."+verb, p.Name+" "+outcome, m.clientIP(r))
 	if err != nil {
 		log.Printf("nodejs: %s %q failed: %v", verb, p.Name, err)
 		http.Error(w, "process operation failed", http.StatusInternalServerError)
@@ -347,7 +348,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save settings failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "nodejs.settings", set.BaseDir+" "+set.NodeDir, clientIP(r))
+	m.deps.Audit(&uid, "nodejs.settings", set.BaseDir+" "+set.NodeDir, m.clientIP(r))
 	writeJSON(w, http.StatusOK, set)
 }
 
@@ -394,8 +395,11 @@ func writePlain(w http.ResponseWriter, s string) {
 	_, _ = w.Write([]byte(s))
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -23,6 +23,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的文件防篡改模块。
@@ -122,7 +123,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "antitamper.settings", strconv.Itoa(len(s.ProtectedDirs))+" dirs", clientIP(r))
+	m.deps.Audit(&uid, "antitamper.settings", strconv.Itoa(len(s.ProtectedDirs))+" dirs", m.clientIP(r))
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -164,7 +165,7 @@ func (m *Module) handleRebuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "antitamper.baseline.rebuild", strconv.Itoa(len(states))+" files", clientIP(r))
+	m.deps.Audit(&uid, "antitamper.baseline.rebuild", strconv.Itoa(len(states))+" files", m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"files": len(states)})
 }
 
@@ -193,7 +194,7 @@ func (m *Module) handleToggle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "antitamper."+verb, "", clientIP(r))
+	m.deps.Audit(&uid, "antitamper."+verb, "", m.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"paused": paused})
 }
 
@@ -248,8 +249,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	}
 }
 
-// clientIP 从 RemoteAddr 取 IP(无代理信任,与 server 层一致)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

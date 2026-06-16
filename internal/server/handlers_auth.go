@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
 
 	"github.com/MevYu/XPanel-Go/internal/auth"
@@ -16,6 +15,8 @@ type authHandlers struct {
 	svc *auth.Service
 	// totp 为登录时的 2FA 校验器;nil 表示不启用登录 2FA 门(如基础 server.New)。
 	totp loginTOTPVerifier
+	// clientIP 提取真实客户端 IP(受信代理感知),供锁定/封禁/审计统一取 IP。
+	clientIP func(*http.Request) string
 }
 
 type loginReq struct {
@@ -35,10 +36,7 @@ func (a *authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
+	ip := a.clientIP(r)
 	u, err := a.svc.VerifyPassword(req.Username, req.Password, ip)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -76,10 +74,7 @@ func (a *authHandlers) refresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
+	ip := a.clientIP(r)
 	tok, err := a.svc.Refresh(req.Refresh, ip)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -94,10 +89,7 @@ func (a *authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
+	ip := a.clientIP(r)
 	// 忽略错误:logout 幂等,且不泄露 token 是否存在。
 	_ = a.svc.Logout(req.Refresh, ip)
 	w.WriteHeader(http.StatusNoContent)

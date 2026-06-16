@@ -26,6 +26,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的 DNS 记录管理模块。
@@ -150,7 +151,7 @@ func (m *Module) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "create failed (duplicate or db error)", http.StatusBadRequest)
 		return
 	}
-	m.deps.Audit(&uid, "dns.domain.create", "domain="+name, clientIP(r))
+	m.deps.Audit(&uid, "dns.domain.create", "domain="+name, m.clientIP(r))
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -177,7 +178,7 @@ func (m *Module) handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "dns.domain.delete", "domain="+d.Name, clientIP(r))
+	m.deps.Audit(&uid, "dns.domain.delete", "domain="+d.Name, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -235,7 +236,7 @@ func (m *Module) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backend apply failed", http.StatusBadGateway)
 		return
 	}
-	m.deps.Audit(&uid, "dns.record.create", recordDetail(domain.Name, saved), clientIP(r))
+	m.deps.Audit(&uid, "dns.record.create", recordDetail(domain.Name, saved), m.clientIP(r))
 	writeJSON(w, http.StatusOK, saved)
 }
 
@@ -276,7 +277,7 @@ func (m *Module) handleUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec.ID = rid
-	m.deps.Audit(&uid, "dns.record.update", recordDetail(domain.Name, rec), clientIP(r))
+	m.deps.Audit(&uid, "dns.record.update", recordDetail(domain.Name, rec), m.clientIP(r))
 	writeJSON(w, http.StatusOK, rec)
 }
 
@@ -316,7 +317,7 @@ func (m *Module) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backend apply failed", http.StatusBadGateway)
 		return
 	}
-	m.deps.Audit(&uid, "dns.record.delete", "domain="+domain.Name+" rid="+strconv.FormatInt(rid, 10), clientIP(r))
+	m.deps.Audit(&uid, "dns.record.delete", "domain="+domain.Name+" rid="+strconv.FormatInt(rid, 10), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -386,7 +387,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "dns.settings.update", "", clientIP(r))
+	m.deps.Audit(&uid, "dns.settings.update", "", m.clientIP(r))
 	eff, credsSet, err := m.st.masked()
 	if err != nil {
 		http.Error(w, "settings unavailable", http.StatusInternalServerError)
@@ -474,8 +475,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP 从 RemoteAddr 取 IP(与 server 层一致,无代理信任)。
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

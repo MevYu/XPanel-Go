@@ -30,6 +30,7 @@ import (
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
 	Audit     func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的一键迁移模块。
@@ -127,7 +128,7 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings save failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "migration.settings.update", "", clientIP(r))
+	m.deps.Audit(&uid, "migration.settings.update", "", m.clientIP(r))
 	s, _ := m.ms.settings()
 	writeJSON(w, http.StatusOK, s)
 }
@@ -198,7 +199,7 @@ func (m *Module) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	m.deps.Audit(&uid, "migration.download", pkg.Filename, clientIP(r))
+	m.deps.Audit(&uid, "migration.download", pkg.Filename, m.clientIP(r))
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+pkg.Filename+"\"")
 	http.ServeContent(w, r, pkg.Filename, time.Unix(pkg.CreatedAt, 0), f)
@@ -225,7 +226,7 @@ func (m *Module) handleDeletePackage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "migration.package.delete", pkg.Filename, clientIP(r))
+	m.deps.Audit(&uid, "migration.package.delete", pkg.Filename, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -274,7 +275,7 @@ func (m *Module) handleExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "export failed: "+safeErr(err), http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "migration.export", fmt.Sprintf("%s -> %s", in.SitePath, pkg.Filename), clientIP(r))
+	m.deps.Audit(&uid, "migration.export", fmt.Sprintf("%s -> %s", in.SitePath, pkg.Filename), m.clientIP(r))
 	writeJSON(w, http.StatusCreated, pkg)
 }
 
@@ -382,7 +383,7 @@ func (m *Module) handleImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "import failed: "+safeErr(err), http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "migration.import", fmt.Sprintf("%s -> %s (db=%t)", pkg.Filename, in.SiteDest, in.ImportDB), clientIP(r))
+	m.deps.Audit(&uid, "migration.import", fmt.Sprintf("%s -> %s (db=%t)", pkg.Filename, in.SiteDest, in.ImportDB), m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -492,7 +493,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -7,17 +7,48 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 )
 
 type Config struct {
-	Addr             string `json:"addr"`               // 监听地址,默认 127.0.0.1:8765(不绑 0.0.0.0)
-	DBPath           string `json:"db_path"`            // SQLite 文件路径
-	JWTSecret        string `json:"jwt_secret"`         // base64,首启随机生成
-	LoginMaxAttempts int    `json:"login_max_attempts"` // 登录失败达此次数即封禁来源 IP,默认 3
-	IPBanHours       int    `json:"ip_ban_hours"`       // IP 封禁时长(小时),默认 72
-	EntryPath        string `json:"entry_path"`         // 隐藏入口路径,首启随机生成(如 /a1b2...)
+	Addr             string   `json:"addr"`               // 监听地址,默认 127.0.0.1:8765(不绑 0.0.0.0)
+	DBPath           string   `json:"db_path"`            // SQLite 文件路径
+	JWTSecret        string   `json:"jwt_secret"`         // base64,首启随机生成
+	LoginMaxAttempts int      `json:"login_max_attempts"` // 登录失败达此次数即封禁来源 IP,默认 3
+	IPBanHours       int      `json:"ip_ban_hours"`       // IP 封禁时长(小时),默认 72
+	EntryPath        string   `json:"entry_path"`         // 隐藏入口路径,首启随机生成(如 /a1b2...)
+	TrustedProxies   []string `json:"trusted_proxies"`    // 受信反代 CIDR/IP 列表,默认空;空=只信 RemoteAddr、忽略 XFF
+}
+
+// ParseTrustedProxies 把 TrustedProxies 解析成网段。裸 IP 视为 /32 或 /128。
+// 空列表返回 nil,表示不信任任何代理(忽略 X-Forwarded-For,防伪造)。
+func (c Config) ParseTrustedProxies() ([]*net.IPNet, error) {
+	if len(c.TrustedProxies) == 0 {
+		return nil, nil
+	}
+	nets := make([]*net.IPNet, 0, len(c.TrustedProxies))
+	for _, entry := range c.TrustedProxies {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if _, n, err := net.ParseCIDR(entry); err == nil {
+			nets = append(nets, n)
+			continue
+		}
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("trusted_proxies: invalid entry %q", entry)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return nets, nil
 }
 
 // Load 读配置文件;不存在则用安全默认值生成并持久化。

@@ -31,6 +31,7 @@ const fanOutConcurrency = 64
 type Deps struct {
 	Principal func(*http.Request) (userID int64, role string)
 	Audit     func(userID *int64, action, detail, ip string)
+	ClientIP  func(*http.Request) string // 取真实客户端 IP(受信代理感知)
 }
 
 // Module 是可开关的 fleet(集群)管理模块。
@@ -104,7 +105,7 @@ func (m *Module) handleCreateEnrollToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "fleet.enroll_token", "created", clientIP(r))
+	m.deps.Audit(&uid, "fleet.enroll_token", "created", m.clientIP(r))
 	writeJSON(w, http.StatusCreated, enrollTokenResp{Token: enroll + "." + secret})
 }
 
@@ -138,7 +139,7 @@ func (m *Module) handleApproveNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "fleet.node.approve", id, clientIP(r))
+	m.deps.Audit(&uid, "fleet.node.approve", id, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -157,7 +158,7 @@ func (m *Module) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "fleet.node.delete", id, clientIP(r))
+	m.deps.Audit(&uid, "fleet.node.delete", id, m.clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -229,7 +230,7 @@ func (m *Module) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	m.deps.Audit(&uid, "fleet.job.create",
-		strconv.FormatInt(jobID, 10)+" "+req.Selector+" "+strings.Join(req.Argv, " "), clientIP(r))
+		strconv.FormatInt(jobID, 10)+" "+req.Selector+" "+strings.Join(req.Argv, " "), m.clientIP(r))
 
 	m.fanOut(jobID, req.Argv, timeoutSec, targets)
 
@@ -367,7 +368,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func clientIP(r *http.Request) string {
+// clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
+func (m *Module) clientIP(r *http.Request) string {
+	if m.deps.ClientIP != nil {
+		return m.deps.ClientIP(r)
+	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -21,8 +21,8 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP 取请求来源 IP(RemoteAddr,不信任任何代理头,与限速/封禁一致)。
-func clientIP(r *http.Request) string {
+// remoteIP 取 RemoteAddr 的纯 IP(去端口)。解析失败回退原值。
+func remoteIP(r *http.Request) string {
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -30,9 +30,60 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
+// ExtractClientIP 是全局唯一的真实客户端 IP 提取逻辑,供中间件、登录 handler、
+// 各模块审计共用。trusted 为受信反代网段(来自 config.TrustedProxies)。
+//
+// 规则:RemoteAddr 不在 trusted 内 → 直接用 RemoteAddr,忽略 XFF(防伪造);
+// 在 trusted 内 → 从右往左跳过 XFF 中所有受信 IP,返回首个非受信 IP;
+// XFF 全受信/为空时回退 X-Real-IP,再回退 RemoteAddr。
+// trusted 为空 → 永远返回 RemoteAddr(直连部署,行为与旧实现一致)。
+func ExtractClientIP(r *http.Request, trusted []*net.IPNet) string {
+	remote := remoteIP(r)
+	if len(trusted) == 0 || !ipInNets(remote, trusted) {
+		return remote
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			ip := strings.TrimSpace(parts[i])
+			if ip == "" {
+				continue
+			}
+			if !ipInNets(ip, trusted) {
+				return ip
+			}
+		}
+	}
+	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
+		return xr
+	}
+	return remote
+}
+
+// ipInNets 报告 ip 是否落在任一网段内。无法解析的 ip 视为不在内。
+func ipInNets(ip string, nets []*net.IPNet) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIPFunc 返回绑定了受信网段的提取器,用于注入中间件/模块 Deps。
+func clientIPFunc(trusted []*net.IPNet) func(*http.Request) string {
+	return func(r *http.Request) string { return ExtractClientIP(r, trusted) }
+}
+
 // IPBanMiddleware 在最前面拦掉被封禁 IP 的全部请求,返回 429。
 // banned 报告该 IP 是否在封禁期内(由 auth.IPBanGuard 提供)。
-func IPBanMiddleware(banned func(ip string) bool) func(http.Handler) http.Handler {
+// clientIP 提取真实客户端 IP(受信代理感知),封禁 key 与登录侧一致。
+func IPBanMiddleware(banned func(ip string) bool, clientIP func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if banned(clientIP(r)) {
@@ -78,6 +129,7 @@ func underEntry(p, entryPath string) bool {
 // RateLimiter:每 IP 一个令牌桶,容量 burst,每秒回补 1 个令牌。
 type RateLimiter struct {
 	burst     float64
+	clientIP  func(*http.Request) string
 	mu        sync.Mutex
 	buckets   map[string]*bucket
 	lastSweep time.Time
@@ -88,8 +140,14 @@ type bucket struct {
 	last   time.Time
 }
 
+// NewRateLimiter 用 RemoteAddr 作 key(不感知代理)。受信代理部署用 NewRateLimiterWithClientIP。
 func NewRateLimiter(burst int) *RateLimiter {
-	return &RateLimiter{burst: float64(burst), buckets: make(map[string]*bucket)}
+	return &RateLimiter{burst: float64(burst), clientIP: remoteIP, buckets: make(map[string]*bucket)}
+}
+
+// NewRateLimiterWithClientIP 用注入的提取器取限速 key(受信代理感知)。
+func NewRateLimiterWithClientIP(burst int, clientIP func(*http.Request) string) *RateLimiter {
+	return &RateLimiter{burst: float64(burst), clientIP: clientIP, buckets: make(map[string]*bucket)}
 }
 
 func (rl *RateLimiter) allow(ip string) bool {
@@ -130,7 +188,7 @@ func (rl *RateLimiter) allow(ip string) bool {
 
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.allow(clientIP(r)) {
+		if !rl.allow(rl.clientIP(r)) {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
