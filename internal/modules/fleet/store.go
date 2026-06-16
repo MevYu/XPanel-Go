@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS fleet_nodes (
 CREATE TABLE IF NOT EXISTS fleet_enroll_tokens (
 	token      TEXT PRIMARY KEY,
 	created_at INTEGER NOT NULL,
+	node_id    TEXT,
 	used_at    INTEGER
 );
 CREATE TABLE IF NOT EXISTS fleet_jobs (
@@ -96,6 +97,10 @@ CREATE TABLE IF NOT EXISTS fleet_job_results (
 CREATE TABLE IF NOT EXISTS fleet_settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fleet_node_creds (
+	node_id  TEXT PRIMARY KEY,
+	password TEXT NOT NULL
 );`
 
 func newFleetStore(st *store.Store) (*fleetStore, error) {
@@ -105,22 +110,46 @@ func newFleetStore(st *store.Store) (*fleetStore, error) {
 	return &fleetStore{db: st.DB}, nil
 }
 
-// getOrCreateSecret 返回持久化的 NATS 连接密钥;不存在则用 gen() 生成并存。
-// 保证 controller 重启后 agent 仍可用同一密钥连入。
+// getOrCreateSecret 返回持久化的引导密钥(bootstrap 凭证密码);不存在则用 gen() 生成并存。
+// 此密钥仅用于受限的引导连接(只能 enroll,不能订阅任何 fleet.cmd.*)。
+// INSERT ... ON CONFLICT DO NOTHING + 回读:并发首次调用不会插出两行。
 func (s *fleetStore) getOrCreateSecret(gen func() string) (string, error) {
-	var v string
-	err := s.db.QueryRow(`SELECT value FROM fleet_settings WHERE key = 'nats_secret'`).Scan(&v)
-	if err == nil {
-		return v, nil
-	}
-	if err != sql.ErrNoRows {
+	if _, err := s.db.Exec(
+		`INSERT INTO fleet_settings (key, value) VALUES ('nats_secret', ?)
+		 ON CONFLICT(key) DO NOTHING`, gen()); err != nil {
 		return "", err
 	}
-	v = gen()
-	if _, err := s.db.Exec(`INSERT INTO fleet_settings (key, value) VALUES ('nats_secret', ?)`, v); err != nil {
+	var v string
+	if err := s.db.QueryRow(`SELECT value FROM fleet_settings WHERE key = 'nats_secret'`).Scan(&v); err != nil {
 		return "", err
 	}
 	return v, nil
+}
+
+// setNodeCred 写入(或覆盖)某节点的专属连接密码。
+func (s *fleetStore) setNodeCred(nodeID, password string) error {
+	_, err := s.db.Exec(`INSERT INTO fleet_node_creds (node_id, password) VALUES (?, ?)
+		ON CONFLICT(node_id) DO UPDATE SET password=excluded.password`, nodeID, password)
+	return err
+}
+
+// nodeCred 返回某节点的专属密码;无凭证返回 ("", false, nil)。
+func (s *fleetStore) nodeCred(nodeID string) (string, bool, error) {
+	var pw string
+	err := s.db.QueryRow(`SELECT password FROM fleet_node_creds WHERE node_id = ?`, nodeID).Scan(&pw)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return pw, true, nil
+}
+
+// deleteNodeCred 撤销某节点的专属凭证,使其立即无法连入。
+func (s *fleetStore) deleteNodeCred(nodeID string) error {
+	_, err := s.db.Exec(`DELETE FROM fleet_node_creds WHERE node_id = ?`, nodeID)
+	return err
 }
 
 // --- enroll tokens ---
@@ -131,15 +160,25 @@ func (s *fleetStore) createEnrollToken(token string) error {
 	return err
 }
 
-// consumeEnrollToken 原子地把未用 token 标为已用,返回是否成功(一次性)。
-func (s *fleetStore) consumeEnrollToken(token string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE fleet_enroll_tokens SET used_at = ?
-		WHERE token = ? AND used_at IS NULL`, time.Now().Unix(), token)
+// bindEnrollToken 原子地把一个未消费的 enroll token 绑定到某 nodeID。
+// 首次调用绑定该 nodeID;后续以同一 (token,nodeID) 调用幂等成功(供审批前轮询)。
+// token 不存在、已消费(used_at 非空)、或已绑给别的 nodeID → 返回 false。
+func (s *fleetStore) bindEnrollToken(token, nodeID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE fleet_enroll_tokens SET node_id = ?
+		WHERE token = ? AND used_at IS NULL AND (node_id IS NULL OR node_id = ?)`,
+		nodeID, token, nodeID)
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+// consumeEnrollToken 原子地把 (token,nodeID) 标为已消费(凭证已下发后调用,真正一次性)。
+func (s *fleetStore) consumeEnrollToken(token, nodeID string) error {
+	_, err := s.db.Exec(`UPDATE fleet_enroll_tokens SET used_at = ?
+		WHERE token = ? AND node_id = ? AND used_at IS NULL`, time.Now().Unix(), token, nodeID)
+	return err
 }
 
 // --- nodes ---
@@ -183,7 +222,11 @@ func (s *fleetStore) approveNode(id string) error {
 	return err
 }
 
+// deleteNode 删除节点并撤销其专属凭证(凭证立即失效,已建连接由 controller 主动断开)。
 func (s *fleetStore) deleteNode(id string) error {
+	if _, err := s.db.Exec(`DELETE FROM fleet_node_creds WHERE node_id = ?`, id); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(`DELETE FROM fleet_nodes WHERE id = ?`, id)
 	return err
 }
