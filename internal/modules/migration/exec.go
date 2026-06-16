@@ -35,9 +35,17 @@ func (cmdDumper) dump(kind, dbName, destFile string, s Settings) (int64, error) 
 	var cmd *exec.Cmd
 	switch kind {
 	case "mysql":
-		cmd = exec.Command(binOr(s.MysqlDump, "mysqldump"), "--single-transaction", "--databases", dbName)
+		bin, err := binOr(s.MysqlDump, "mysqldump")
+		if err != nil {
+			return 0, err
+		}
+		cmd = exec.Command(bin, "--single-transaction", "--databases", dbName)
 	case "postgres":
-		cmd = exec.Command(binOr(s.PgDump, "pg_dump"), dbName)
+		bin, err := binOr(s.PgDump, "pg_dump")
+		if err != nil {
+			return 0, err
+		}
+		cmd = exec.Command(bin, dbName)
 	default:
 		return 0, fmt.Errorf("unsupported db kind %q", kind)
 	}
@@ -70,9 +78,17 @@ func (cmdRestorer) restore(kind, dbName, sqlFile string, s Settings) error {
 	switch kind {
 	case "mysql":
 		// mysqldump --databases 的转储自带 USE/CREATE DATABASE,无需在命令行指定库。
-		cmd = exec.Command(binOr(s.MysqlCLI, "mysql"))
+		bin, err := binOr(s.MysqlCLI, "mysql")
+		if err != nil {
+			return err
+		}
+		cmd = exec.Command(bin)
 	case "postgres":
-		cmd = exec.Command(binOr(s.PsqlCLI, "psql"), "-d", dbName)
+		bin, err := binOr(s.PsqlCLI, "psql")
+		if err != nil {
+			return err
+		}
+		cmd = exec.Command(bin, "-d", dbName)
 	default:
 		return fmt.Errorf("unsupported db kind %q", kind)
 	}
@@ -85,9 +101,14 @@ func (cmdRestorer) restore(kind, dbName, sqlFile string, s Settings) error {
 	return nil
 }
 
-func binOr(v, def string) string {
+// binOr 选定要执行的工具:空则用内置默认名。返回前再校验一次(纵深防御):
+// 即便有非法值绕过保存/载入校验流入此处,也拒绝执行而非把任意路径当程序运行。
+func binOr(v, def string) (string, error) {
 	if v == "" {
-		return def
+		return def, nil
 	}
-	return v
+	if !validToolPath(v) {
+		return "", errInvalidToolPath
+	}
+	return v, nil
 }
