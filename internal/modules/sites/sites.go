@@ -140,6 +140,8 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/sites/{id}/backups", m.handleCreateBackup)
 	r.Get("/sites/{id}/backups", m.handleListBackups)
 	r.Get("/sites/{id}/backups/{bid}/download", m.handleDownloadBackup)
+	r.Post("/sites/{id}/backups/{bid}/restore", m.handleRestoreBackup) // 危险:覆盖站点目录,需 admin + 二次确认
+	r.Delete("/sites/{id}/backups/{bid}", m.handleDeleteBackup)        // 危险:删归档,需 admin + 二次确认
 
 	r.Get("/settings", m.handleGetSettings)
 	r.Put("/settings", m.handlePutSettings)
