@@ -29,8 +29,12 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/modules/firewall"
 	"github.com/MevYu/XPanel-Go/internal/modules/ftp"
 	"github.com/MevYu/XPanel-Go/internal/modules/java"
+	"github.com/MevYu/XPanel-Go/internal/modules/loadbalancer"
+	"github.com/MevYu/XPanel-Go/internal/modules/mail"
 	"github.com/MevYu/XPanel-Go/internal/modules/malscan"
+	"github.com/MevYu/XPanel-Go/internal/modules/memcached"
 	"github.com/MevYu/XPanel-Go/internal/modules/migration"
+	"github.com/MevYu/XPanel-Go/internal/modules/mysqlrepl"
 	"github.com/MevYu/XPanel-Go/internal/modules/nodejs"
 	"github.com/MevYu/XPanel-Go/internal/modules/php"
 	"github.com/MevYu/XPanel-Go/internal/modules/python"
@@ -199,6 +203,22 @@ func main() {
 		Audit:     auditFn,
 	}))
 	reg.Register(migration.New(st, migration.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(mail.New(st, nil, mail.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(loadbalancer.New(st, loadbalancer.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(memcached.New(st, nil, memcached.Deps{
+		Principal: server.PrincipalFromRequest,
+		Audit:     auditFn,
+	}))
+	reg.Register(mysqlrepl.New(cfg.JWTSecret, st, mysqlrepl.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
 	}))
