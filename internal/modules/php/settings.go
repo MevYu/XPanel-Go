@@ -55,6 +55,21 @@ func (s Settings) extConfDir(version string) string {
 	return filepath.Join(s.versionDir(version), "etc", "php.d")
 }
 
+// fpmPoolConf 返回某版本的 fpm www pool 配置路径(<base>/<version>/etc/php-fpm.d/www.conf)。
+func (s Settings) fpmPoolConf(version string) string {
+	return filepath.Join(s.versionDir(version), "etc", "php-fpm.d", "www.conf")
+}
+
+// slowLogPath 返回某版本的 fpm 慢日志路径(<base>/<version>/var/log/slow.log)。
+func (s Settings) slowLogPath(version string) string {
+	return filepath.Join(s.versionDir(version), "var", "log", "slow.log")
+}
+
+// errorLogPath 返回某版本的 php 错误日志路径(<base>/<version>/var/log/php-fpm.log)。
+func (s Settings) errorLogPath(version string) string {
+	return filepath.Join(s.versionDir(version), "var", "log", "php-fpm.log")
+}
+
 // fpmUnit 返回某版本的 php-fpm systemd 单元名(模板替换版本号)。
 func (s Settings) fpmUnit(version string) string {
 	if strings.Contains(s.FpmUnitTemplate, "%s") {

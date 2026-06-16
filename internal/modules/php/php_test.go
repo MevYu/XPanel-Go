@@ -16,11 +16,14 @@ import (
 
 // mockRunner 记录调用并返回预设结果,绝不触碰真实系统。
 type mockRunner struct {
-	available  error
-	modules    string
-	modulesErr error
-	fpmCalls   []string // "verb unit"
-	fpmErr     error
+	available   error
+	modules     string
+	modulesErr  error
+	fpmCalls    []string // "verb unit"
+	fpmErr      error
+	cliBanner   string
+	cliErr      error
+	activeUnits map[string]bool
 }
 
 func (m *mockRunner) Available() error               { return m.available }
@@ -30,6 +33,8 @@ func (m *mockRunner) FpmAction(verb, unit string) (string, error) {
 	m.fpmCalls = append(m.fpmCalls, verb+" "+unit)
 	return "ok", m.fpmErr
 }
+func (m *mockRunner) CLIVersion() (string, error) { return m.cliBanner, m.cliErr }
+func (m *mockRunner) FpmActive(unit string) bool  { return m.activeUnits[unit] }
 
 func newTestModule(t *testing.T, role string, run PHPRunner, inst Installer) (*Module, *int, *chi.Mux) {
 	t.Helper()

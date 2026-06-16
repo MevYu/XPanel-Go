@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -72,8 +74,24 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/versions", m.handleListVersions) // 只读:检测已安装版本
 	r.Post("/install", m.handleInstall)      // 危险:admin + X-Confirm-Danger,安装新版本
 
-	r.Get("/versions/{version}/ini", m.handleGetIni) // 只读:php.ini 常用项
+	r.Get("/cli", m.handleCLIVersion) // 只读:命令行默认 php 版本
+
+	r.Get("/ini/schema", m.handleIniSchema)          // 只读:表单化字段元数据(版本无关)
+	r.Get("/versions/{version}/ini", m.handleGetIni) // 只读:php.ini 常用项(白名单)
 	r.Put("/versions/{version}/ini", m.handlePutIni) // 危险:admin + X-Confirm-Danger,编辑 php.ini
+
+	r.Get("/versions/{version}/ini/raw", m.handleGetRawIni) // 只读:原始 php.ini 全文
+	r.Put("/versions/{version}/ini/raw", m.handlePutRawIni) // 危险:admin + X-Confirm-Danger,原始编辑
+
+	r.Get("/disabled-functions/candidates", m.handleDangerFuncCandidates) // 只读:可管理危险函数候选
+	r.Get("/versions/{version}/disabled-functions", m.handleGetDisabled)  // 只读:当前 disable_functions
+	r.Put("/versions/{version}/disabled-functions", m.handlePutDisabled)  // 危险:admin + X-Confirm-Danger
+
+	r.Get("/fpm/schema", m.handleFpmSchema)                         // 只读:fpm 字段元数据(版本无关)
+	r.Get("/versions/{version}/fpm/config", m.handleGetFpm)         // 只读:fpm pool 参数
+	r.Put("/versions/{version}/fpm/config", m.handlePutFpm)         // 危险:admin + X-Confirm-Danger
+	r.Get("/versions/{version}/fpm/status", m.handleFpmStatus)      // 只读:systemctl status
+	r.Get("/versions/{version}/log/{kind:slow|error}", m.handleLog) // 只读:慢日志/错误日志 tail
 
 	r.Get("/versions/{version}/extensions", m.handleListExtensions)                             // 只读
 	r.Post("/versions/{version}/extensions/{ext}/{op:enable|disable}", m.handleToggleExtension) // 危险:admin + X-Confirm-Danger
@@ -140,8 +158,11 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 
 // VersionInfo 是一个已安装版本的视图。
 type VersionInfo struct {
-	Version string `json:"version"`
-	Banner  string `json:"banner"` // php -v 首行;detect 失败为空
+	Version    string `json:"version"`
+	Banner     string `json:"banner"`      // php -v 首行;detect 失败为空
+	FpmUnit    string `json:"fpm_unit"`    // 对应 php-fpm systemd 单元名
+	FpmActive  bool   `json:"fpm_active"`  // php-fpm 是否在运行(systemctl is-active)
+	CLIDefault bool   `json:"cli_default"` // 是否为命令行默认版本(php -v 横幅匹配)
 }
 
 func (m *Module) handleListVersions(w http.ResponseWriter, _ *http.Request) {
@@ -150,16 +171,29 @@ func (m *Module) handleListVersions(w http.ResponseWriter, _ *http.Request) {
 		serverError(w, "settings", err)
 		return
 	}
+	cliBanner, _ := m.run.CLIVersion()
+	cliBanner = firstLine(cliBanner)
 	versions := detectVersions(set.InstallBase)
 	out := make([]VersionInfo, 0, len(versions))
 	for _, v := range versions {
-		info := VersionInfo{Version: v}
+		info := VersionInfo{Version: v, FpmUnit: set.fpmUnit(v)}
 		if banner, err := m.run.Version(set.phpBin(v)); err == nil {
 			info.Banner = firstLine(banner)
+			info.CLIDefault = cliBanner != "" && info.Banner == cliBanner
 		}
+		info.FpmActive = m.run.FpmActive(info.FpmUnit)
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (m *Module) handleCLIVersion(w http.ResponseWriter, _ *http.Request) {
+	banner, err := m.run.CLIVersion()
+	resp := struct {
+		Available bool   `json:"available"`
+		Banner    string `json:"banner"`
+	}{Available: err == nil, Banner: firstLine(banner)}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (m *Module) handleInstall(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +296,269 @@ func (m *Module) handlePutIni(w http.ResponseWriter, r *http.Request) {
 	}
 	m.deps.Audit(&uid, "php.ini.update", version+" "+strings.Join(keys(changes), ","), m.clientIP(r))
 	writeJSON(w, http.StatusOK, parseIni(updated))
+}
+
+func (m *Module) handleIniSchema(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, iniSchema)
+}
+
+// --- raw php.ini ---
+
+func (m *Module) handleGetRawIni(w http.ResponseWriter, r *http.Request) {
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	content, err := os.ReadFile(set.iniPath(version))
+	if err != nil {
+		log.Printf("php: read raw ini for %q failed: %v", version, err)
+		http.Error(w, "php.ini unavailable", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(content)
+}
+
+func (m *Module) handlePutRawIni(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRawIni+1))
+	if err != nil {
+		http.Error(w, "ini body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := validateRawIni(string(body)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	path := set.iniPath(version)
+	if _, err := os.Stat(path); err != nil {
+		http.Error(w, "php.ini unavailable", http.StatusNotFound)
+		return
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		serverError(w, "write raw ini", err)
+		return
+	}
+	m.deps.Audit(&uid, "php.ini.raw_update", version, clientIP(r))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- disable_functions ---
+
+func (m *Module) handleDangerFuncCandidates(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, DangerousFuncList())
+}
+
+func (m *Module) handleGetDisabled(w http.ResponseWriter, r *http.Request) {
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	content, err := os.ReadFile(set.iniPath(version))
+	if err != nil {
+		log.Printf("php: read ini for %q failed: %v", version, err)
+		http.Error(w, "php.ini unavailable", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, parseDisableFunctions(string(content)))
+}
+
+func (m *Module) handlePutDisabled(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	var funcs []string
+	if !decode(w, r, &funcs) {
+		return
+	}
+	if err := validateDisableFunctions(funcs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	path := set.iniPath(version)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("php: read ini for %q failed: %v", version, err)
+		http.Error(w, "php.ini unavailable", http.StatusNotFound)
+		return
+	}
+	updated := applyDisableFunctions(string(content), funcs)
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		serverError(w, "write ini", err)
+		return
+	}
+	m.deps.Audit(&uid, "php.disable_functions.update", version+" "+strings.Join(funcs, ","), clientIP(r))
+	writeJSON(w, http.StatusOK, parseDisableFunctions(updated))
+}
+
+// --- fpm pool config ---
+
+func (m *Module) handleFpmSchema(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, fpmSchema)
+}
+
+func (m *Module) handleGetFpm(w http.ResponseWriter, r *http.Request) {
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	content, err := os.ReadFile(set.fpmPoolConf(version))
+	if err != nil {
+		log.Printf("php: read fpm pool for %q failed: %v", version, err)
+		http.Error(w, "fpm pool config unavailable", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, parseFpmConfig(string(content)))
+}
+
+func (m *Module) handlePutFpm(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	var changes map[string]string
+	if !decode(w, r, &changes) {
+		return
+	}
+	if err := validateFpmChanges(changes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	path := set.fpmPoolConf(version)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("php: read fpm pool for %q failed: %v", version, err)
+		http.Error(w, "fpm pool config unavailable", http.StatusNotFound)
+		return
+	}
+	updated := applyFpmChanges(string(content), changes)
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		serverError(w, "write fpm pool", err)
+		return
+	}
+	m.deps.Audit(&uid, "php.fpm.config", version+" "+strings.Join(keys(changes), ","), clientIP(r))
+	writeJSON(w, http.StatusOK, parseFpmConfig(updated))
+}
+
+func (m *Module) handleFpmStatus(w http.ResponseWriter, r *http.Request) {
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	unit := set.fpmUnit(version)
+	out, _ := m.run.FpmAction("status", unit)
+	resp := struct {
+		Unit   string `json:"unit"`
+		Active bool   `json:"active"`
+		Status string `json:"status"`
+	}{Unit: unit, Active: m.run.FpmActive(unit), Status: out}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// --- logs ---
+
+func (m *Module) handleLog(w http.ResponseWriter, r *http.Request) {
+	version, ok := versionParam(w, r)
+	if !ok {
+		return
+	}
+	set, err := m.ps.getSettings()
+	if err != nil {
+		serverError(w, "settings", err)
+		return
+	}
+	var path string
+	switch chi.URLParamFromCtx(r.Context(), "kind") {
+	case "slow":
+		path = set.slowLogPath(version)
+	case "error":
+		path = set.errorLogPath(version)
+	default:
+		http.Error(w, "unknown log kind", http.StatusBadRequest)
+		return
+	}
+	tail, ok := readLogTail(path, logTailLines(r))
+	if !ok {
+		http.Error(w, "log unavailable", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(tail))
+}
+
+// logTailLines 取 ?lines= 查询参数(1..2000),缺省/非法回退 200。
+func logTailLines(r *http.Request) int {
+	n, err := strconv.Atoi(r.URL.Query().Get("lines"))
+	if err != nil || n < 1 {
+		return 200
+	}
+	if n > 2000 {
+		return 2000
+	}
+	return n
 }
 
 // --- Extensions ---

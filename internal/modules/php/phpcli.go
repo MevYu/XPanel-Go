@@ -33,6 +33,10 @@ type PHPRunner interface {
 	Modules(bin string) (string, error)
 	// FpmAction 对 php-fpm 服务单元执行 systemctl <verb> <unit>,返回合并输出。
 	FpmAction(verb, unit string) (string, error)
+	// CLIVersion 执行 PATH 上的裸 php -v,返回合并输出(用于展示命令行默认版本)。
+	CLIVersion() (string, error)
+	// FpmActive 报告 php-fpm 单元是否处于 active 状态(systemctl is-active)。
+	FpmActive(unit string) bool
 }
 
 // execRunner 是 PHPRunner 的真实实现:调用系统 php / systemctl 二进制。
@@ -64,6 +68,22 @@ func (execRunner) Modules(bin string) (string, error) {
 		return text, fmt.Errorf("php -m: %w", err)
 	}
 	return text, nil
+}
+
+// CLIVersion 取 PATH 上默认 php 的版本横幅。无 php 时返回错误(视为未设默认)。
+func (execRunner) CLIVersion() (string, error) {
+	out, err := exec.Command("php", "-v").CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		return text, fmt.Errorf("php -v: %w", err)
+	}
+	return text, nil
+}
+
+// FpmActive 用 systemctl is-active 判断单元是否运行。退出码非 0(inactive/未知)即 false。
+func (execRunner) FpmActive(unit string) bool {
+	out, _ := exec.Command("systemctl", "is-active", unit).Output()
+	return strings.TrimSpace(string(out)) == "active"
 }
 
 // fpmVerbs 允许的 systemctl 动词。start/stop/restart 为状态变更,status 只读。
