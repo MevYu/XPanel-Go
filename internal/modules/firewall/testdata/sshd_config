@@ -1,0 +1,4 @@
+# sample sshd_config for tests
+#Port 22
+Port 2222
+PermitRootLogin no
