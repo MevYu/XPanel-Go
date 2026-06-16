@@ -312,6 +312,7 @@ func TestAliasAddDeleteAndReject(t *testing.T) {
 	be := newMockBackend()
 	m := newTestModule(t, "admin", be, &auditRec{})
 	r := router(m)
+	do(r, "POST", "/domains", `{"domain":"example.com"}`, nil)
 	if rec := do(r, "POST", "/aliases", `{"source":"info@example.com","destination":"bob@example.com"}`, nil); rec.Code != http.StatusNoContent {
 		t.Fatalf("add alias got %d body=%q", rec.Code, rec.Body.String())
 	}
@@ -353,6 +354,69 @@ func TestSettingsRoundTripAndDefaults(t *testing.T) {
 	// 相对路径拒绝。
 	if rec := do(r, "PUT", "/settings", `{"mail_store_dir":"relative/path"}`, nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("relative path should 400, got %d", rec.Code)
+	}
+}
+
+func TestSettingsRejectsTraversalAndUncleanPaths(t *testing.T) {
+	m := newTestModule(t, "admin", newMockBackend(), &auditRec{})
+	r := router(m)
+	// 每个路径字段都必须挡住 .. / 非 cleaned / 控制字符,防越界覆写主机文件。
+	bad := []string{
+		`{"virtual_alias_file":"/etc/postfix/../cron.d/x"}`,
+		`{"virtual_mailbox_file":"/etc/postfix/../../etc/cron.d/x"}`,
+		`{"virtual_domain_file":"/etc/postfix/./virtual"}`,
+		`{"postfix_config_dir":"/etc/postfix/"}`,
+		`{"dovecot_config_dir":"/etc/dovecot/../cron.d"}`,
+		`{"mail_store_dir":"/var/vmail/\nrm"}`,
+		`{"mail_store_dir":"/var/vmail/a b"}`,
+		`{"virtual_alias_file":"/etc/cron.d/x;touch y"}`,
+	}
+	for _, b := range bad {
+		if rec := do(r, "PUT", "/settings", b, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("path %s should 400, got %d", b, rec.Code)
+		}
+	}
+	// 合法绝对、cleaned、无 .. 路径放行。
+	if rec := do(r, "PUT", "/settings", `{"mail_store_dir":"/srv/vmail","virtual_alias_file":"/etc/postfix/virtual"}`, nil); rec.Code != http.StatusOK {
+		t.Errorf("clean absolute paths should 200, got %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAliasSourceMustBeLocalDomain(t *testing.T) {
+	be := newMockBackend()
+	m := newTestModule(t, "admin", be, &auditRec{})
+	r := router(m)
+	do(r, "POST", "/domains", `{"domain":"example.com"}`, nil)
+	// source 非本域:必须 400,且不投影到后端。
+	if rec := do(r, "POST", "/aliases", `{"source":"info@other.com","destination":"bob@example.com"}`, nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("alias source non-local domain should 400, got %d", rec.Code)
+	}
+	if len(be.syncedAls) != 0 {
+		t.Fatalf("rejected alias must not sync, got %v", be.syncedAls)
+	}
+	// source 本域:成功(destination 可外部)。
+	if rec := do(r, "POST", "/aliases", `{"source":"info@example.com","destination":"bob@other.com"}`, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("alias source local domain should 204, got %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMaildirNoTraversal(t *testing.T) {
+	be := newMockBackend()
+	m := newTestModule(t, "admin", be, &auditRec{})
+	r := router(m)
+	do(r, "POST", "/domains", `{"domain":"example.com"}`, nil)
+	if rec := do(r, "POST", "/mailboxes", `{"address":"bob@example.com","password":"pw1234"}`, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("create mailbox got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if len(be.syncedMbx) != 1 {
+		t.Fatalf("expected one synced mailbox, got %d", len(be.syncedMbx))
+	}
+	md := be.syncedMbx[0].Maildir
+	if strings.Contains(md, "..") {
+		t.Fatalf("maildir must not contain .., got %q", md)
+	}
+	if md != "example.com/bob/" {
+		t.Fatalf("maildir should be example.com/bob/, got %q", md)
 	}
 }
 

@@ -8,9 +8,11 @@ package mail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -220,7 +222,13 @@ func (m *Module) handleCreateMailbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mail backend password hashing failed", http.StatusBadGateway)
 		return
 	}
-	maildir := domain + "/" + localOf(req.Address) + "/" // 相对 virtual_mailbox_base 的 maildir
+	// maildir 相对 virtual_mailbox_base;domain/local 均已过白名单(无 ..、无 /),
+	// 用 SafeJoin 在 store 根下构造再转回相对形式,拒绝任何越界。
+	maildir, err := safeMaildir(domain, localOf(req.Address))
+	if err != nil {
+		http.Error(w, "invalid mailbox path", http.StatusBadRequest)
+		return
+	}
 	if err := m.ds.upsertMailbox(mailboxMeta{Address: req.Address, Domain: domain, Maildir: maildir, QuotaMB: req.QuotaMB}); err != nil {
 		log.Printf("mail: persist mailbox failed: %v", err)
 		http.Error(w, "mailbox persist failed", http.StatusInternalServerError)
@@ -338,6 +346,16 @@ func (m *Module) handleAddAlias(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errInvalidEmail.Error(), http.StatusBadRequest)
 		return
 	}
+	_, srcDomain, _ := splitEmail(req.Source)
+	has, err := m.ds.hasDomain(srcDomain)
+	if err != nil {
+		http.Error(w, "domain lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if !has {
+		http.Error(w, "alias source must be an existing mail domain", http.StatusBadRequest)
+		return
+	}
 	if err := m.ds.addAlias(req.Source, req.Destination); err != nil {
 		log.Printf("mail: add alias failed: %v", err)
 		http.Error(w, "alias add failed", http.StatusInternalServerError)
@@ -409,11 +427,15 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	// 所有路径设置非空则必须是绝对路径(挡相对路径/注入,空值由默认兜底)。
+	// 路径设置非空则必须绝对、cleaned、无 ..、无控制字符与元字符(挡越界覆写/注入,
+	// 空值由默认兜底)。模块随后会往这些路径写内容并 postmap,未约束等于任意主机写。
 	for _, p := range []string{in.PostfixConfigDir, in.DovecotConfigDir, in.MailStoreDir,
 		in.VirtualMailboxFile, in.VirtualDomainFile, in.VirtualAliasFile} {
-		if p != "" && !isAbs(p) {
-			http.Error(w, "all path settings must be absolute paths", http.StatusBadRequest)
+		if p == "" {
+			continue
+		}
+		if err := validAbsPath(p); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
@@ -549,6 +571,21 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
+// safeMaildir 构造相对 virtual_mailbox_base 的 maildir("<domain>/<local>/")。
+// domain/local 已过白名单;这里用 filepath.Join 在固定根下规整后断言仍在根内且无 ..,
+// 作纵深防御挡任何越界写入。
+func safeMaildir(domain, local string) (string, error) {
+	const root = "/"
+	joined := filepath.Join(root, domain, local)
+	rel := strings.TrimPrefix(joined, root)
+	if rel == joined || rel == "" || strings.Contains(rel, "..") {
+		return "", errMaildirEscape
+	}
+	return rel + "/", nil
+}
+
+var errMaildirEscape = errors.New("maildir escapes mail store root")
+
 // localOf 返回邮箱地址 @ 前的 local-part(调用方已确保 addr 合法)。
 func localOf(addr string) string {
 	if i := strings.IndexByte(addr, '@'); i > 0 {
@@ -556,6 +593,3 @@ func localOf(addr string) string {
 	}
 	return addr
 }
-
-// isAbs 报告 p 是否绝对路径。
-func isAbs(p string) bool { return len(p) > 0 && p[0] == '/' }

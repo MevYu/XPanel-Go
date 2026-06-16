@@ -58,3 +58,22 @@ func TestValidPassword(t *testing.T) {
 		t.Error("257-char password should fail")
 	}
 }
+
+func TestValidAbsPath(t *testing.T) {
+	good := []string{"/etc/postfix", "/etc/postfix/virtual", "/var/vmail", "/srv/vmail/x"}
+	for _, p := range good {
+		if err := validAbsPath(p); err != nil {
+			t.Errorf("validAbsPath(%q) = %v, want nil", p, err)
+		}
+	}
+	bad := []string{
+		"", "relative/path", "/etc/postfix/", "/etc/postfix/./virtual",
+		"/etc/postfix/../cron.d/x", "/a/../b", "/var/vmail/\nrm", "/a b/c",
+		"/etc/cron.d/x;touch y", "/a$b", "/a`b", "..",
+	}
+	for _, p := range bad {
+		if err := validAbsPath(p); err == nil {
+			t.Errorf("validAbsPath(%q) = nil, want error", p)
+		}
+	}
+}

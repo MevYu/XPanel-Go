@@ -2,6 +2,8 @@ package mail
 
 import (
 	"errors"
+	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -65,6 +67,27 @@ func validEmail(addr string) bool {
 		return false
 	}
 	return localPartRe.MatchString(local) && validDomain(domain)
+}
+
+// validAbsPath 校验路径设置:绝对、无控制字符与 shell 元字符、无 ..、cleaned 形式。
+// 这些路径会被模块当作落盘/postmap 目标,未约束的 .. 或非 cleaned 形式可越界覆写主机文件。
+func validAbsPath(p string) error {
+	if p == "" {
+		return fmt.Errorf("path must not be empty")
+	}
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("path %q must be absolute", p)
+	}
+	if strings.ContainsAny(p, "\n\r\t ;{}*?$`\\\"'") {
+		return fmt.Errorf("path %q contains forbidden characters", p)
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("path %q must not contain ..", p)
+	}
+	if filepath.Clean(p) != p {
+		return fmt.Errorf("path %q must be in cleaned form", p)
+	}
+	return nil
 }
 
 // validPassword 报告口令长度合规且不含控制字符(挡 NUL/换行注入 dovecot 用户库)。
