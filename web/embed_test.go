@@ -21,6 +21,32 @@ func TestHandlerServesIndexFallback(t *testing.T) {
 	}
 }
 
+func TestHandlerWithBaseInjectsBase(t *testing.T) {
+	const entry = "/abc123def456"
+	h := HandlerWithBase(entry)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, entry+"/", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("entry index code=%d", rr.Code)
+	}
+	body := rr.Body.String()
+	want := `window.__XPANEL_BASE__="` + entry + `";`
+	if !strings.Contains(body, want) {
+		t.Fatalf("index must inject base script %q, body=%q", want, body)
+	}
+}
+
+func TestHandlerWithBaseServesAssets(t *testing.T) {
+	h := HandlerWithBase("/abc123def456")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/assets/does-not-exist.js", nil))
+	// missing asset falls back to index (200), real asset would be served by FileServer.
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d", rr.Code)
+	}
+}
+
 func TestHandlerMissingAssetFallsBackNoCache(t *testing.T) {
 	rr := httptest.NewRecorder()
 	Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/assets/does-not-exist.js", nil))

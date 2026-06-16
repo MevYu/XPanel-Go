@@ -30,10 +30,17 @@ type Service struct {
 	store   *store.Store
 	jwt     *JWTManager
 	lockout *Lockout
+	ipban   *IPBanGuard // 可为 nil:不启用 IP 级封禁(如基础 server.New)
 }
 
 func NewService(s *store.Store, jwt *JWTManager, lo *Lockout) *Service {
 	return &Service{store: s, jwt: jwt, lockout: lo}
+}
+
+// WithIPBan 注入 IP 封禁守卫,失败计数达阈值即封禁来源 IP。返回自身便于链式构造。
+func (s *Service) WithIPBan(g *IPBanGuard) *Service {
+	s.ipban = g
+	return s
 }
 
 // Register 创建用户;密码在此哈希。调用方负责鉴权(如首启 bootstrap)。
@@ -68,17 +75,27 @@ func (s *Service) VerifyPassword(username, password, ip string) (store.User, err
 	u, err := s.store.GetUserByUsername(username)
 	if err != nil {
 		VerifyPassword(dummyHash(), password) // 抹平时序,结果丢弃
-		s.lockout.Fail(key)
-		_ = s.store.WriteAudit(nil, "login.failure", username, ip)
+		s.failLogin(key, ip, username)
 		return store.User{}, ErrInvalidCredentials
 	}
 	if !VerifyPassword(u.PassHash, password) {
-		s.lockout.Fail(key)
-		_ = s.store.WriteAudit(nil, "login.failure", username, ip)
+		s.failLogin(key, ip, username)
 		return store.User{}, ErrInvalidCredentials
 	}
 	s.lockout.Reset(key)
+	if s.ipban != nil {
+		s.ipban.Reset(ip)
+	}
 	return u, nil
+}
+
+// failLogin 记一次登录失败:写审计、刷新 username@ip 锁定、并累计 IP 级封禁计数。
+func (s *Service) failLogin(key, ip, username string) {
+	s.lockout.Fail(key)
+	if s.ipban != nil {
+		s.ipban.Fail(ip)
+	}
+	_ = s.store.WriteAudit(nil, "login.failure", username, ip)
 }
 
 // Refresh 旋转:校验旧 refresh → 原子消费 → 只有赢者发新对。

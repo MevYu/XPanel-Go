@@ -52,8 +52,14 @@ type LoginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err er
 
 // NewWithModules 在基础路由上接入模块系统:模块管理 API + 各模块路由(带启用门)。
 // totp 为登录时的 2FA 校验器;传 nil 则不启用登录 2FA 门。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier) http.Handler {
+// ipBanned 报告来源 IP 是否被封禁(传 nil 则不启用 IP 封禁门)。
+// entryPath 为隐藏面板入口路径;SPA 只在此路径下提供,其余非 API/静态请求返回 404。
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, entryPath string) http.Handler {
 	r := chi.NewRouter()
+	if ipBanned != nil {
+		r.Use(IPBanMiddleware(ipBanned)) // 最前面:被封 IP 的全部请求直接拒
+	}
+	r.Use(EntryGate(entryPath))
 	r.Use(SecurityHeaders)
 	r.Use(NewRateLimiter(60).Middleware)
 
@@ -88,8 +94,8 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 	})
 
 	// catch-all:非 API/公开路由交给 SPA(静态资源或 index.html 回退)。
-	// 中间件链(SecurityHeaders 等)对 NotFound 同样生效。
-	r.NotFound(webui.Handler().ServeHTTP)
+	// EntryGate 已确保只有入口路径与 /assets/* 能到这;SPA 注入 entryPath 作为 basename。
+	r.NotFound(webui.HandlerWithBase(entryPath).ServeHTTP)
 
 	return r
 }

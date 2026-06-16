@@ -28,4 +28,8 @@ var migrations = []string{
 		id      TEXT PRIMARY KEY,
 		enabled INTEGER NOT NULL DEFAULT 0
 	)`,
+	`CREATE TABLE IF NOT EXISTS ip_bans (
+		ip           TEXT PRIMARY KEY,
+		banned_until INTEGER NOT NULL
+	)`,
 }

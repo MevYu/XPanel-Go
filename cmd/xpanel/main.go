@@ -74,7 +74,11 @@ func main() {
 	}
 	jm := auth.NewJWTManager(secret)
 	lo := auth.NewLockout(5, 5*time.Minute, time.Now)
-	svc := auth.NewService(st, jm, lo)
+	banGuard, err := auth.NewIPBanGuard(st, cfg.LoginMaxAttempts, time.Duration(cfg.IPBanHours)*time.Hour, time.Now)
+	if err != nil {
+		log.Fatalf("ip ban guard: %v", err)
+	}
+	svc := auth.NewService(st, jm, lo).WithIPBan(banGuard)
 
 	// 首启:无用户则创建 admin,随机密码打印到 stdout(仅此一次)
 	n, err := st.CountUsers()
@@ -87,7 +91,7 @@ func main() {
 			log.Fatalf("bootstrap admin: %v", err)
 		}
 		_ = st.WriteAudit(nil, "bootstrap.admin", "admin", "system")
-		fmt.Printf("==== XPanel 首次启动 ====\n用户名: admin\n密码: %s\n(请立即登录并修改)\n", pw)
+		fmt.Printf("==== XPanel 首次启动 ====\n用户名: admin\n密码: %s\n入口地址: http://%s%s/\n(请立即登录并修改)\n", pw, cfg.Addr, cfg.NormalizedEntryPath())
 	}
 
 	auditFn := func(userID *int64, action, detail, ip string) {
@@ -233,7 +237,7 @@ func main() {
 	loginTOTP := func(userID int64, code string) (enabled, ok bool, err error) {
 		return users.VerifyLoginTOTP(st, cfg.JWTSecret, userID, code)
 	}
-	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP)
+	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, cfg.NormalizedEntryPath())
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,

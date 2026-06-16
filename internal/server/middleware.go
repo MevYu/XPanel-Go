@@ -21,6 +21,60 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// clientIP 取请求来源 IP(RemoteAddr,不信任任何代理头,与限速/封禁一致)。
+func clientIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// IPBanMiddleware 在最前面拦掉被封禁 IP 的全部请求,返回 429。
+// banned 报告该 IP 是否在封禁期内(由 auth.IPBanGuard 提供)。
+func IPBanMiddleware(banned func(ip string) bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if banned(clientIP(r)) {
+				http.Error(w, "forbidden", http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// EntryGate 隐藏面板入口:非白名单前缀且不在 entryPath 下的请求一律 404(不暴露面板)。
+// 白名单:/api/* (含认证)、/s/*(公开模块)、/healthz、/assets/*(静态资源)。
+// entryPath 及其子路径放行给 SPA handler。
+func EntryGate(entryPath string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := r.URL.Path
+			if isAllowedPrefix(p) || underEntry(p, entryPath) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			http.NotFound(w, r)
+		})
+	}
+}
+
+func isAllowedPrefix(p string) bool {
+	return p == "/healthz" ||
+		p == "/api" || strings.HasPrefix(p, "/api/") ||
+		p == "/s" || strings.HasPrefix(p, "/s/") ||
+		p == "/assets" || strings.HasPrefix(p, "/assets/")
+}
+
+// underEntry 判断 p 是否等于 entryPath 或在其子路径下。
+func underEntry(p, entryPath string) bool {
+	if entryPath == "/" {
+		return true
+	}
+	return p == entryPath || strings.HasPrefix(p, entryPath+"/")
+}
+
 // RateLimiter:每 IP 一个令牌桶,容量 burst,每秒回补 1 个令牌。
 type RateLimiter struct {
 	burst     float64
@@ -76,11 +130,7 @@ func (rl *RateLimiter) allow(ip string) bool {
 
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-		if !rl.allow(ip) {
+		if !rl.allow(clientIP(r)) {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
