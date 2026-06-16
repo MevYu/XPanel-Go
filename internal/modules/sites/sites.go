@@ -39,6 +39,7 @@ type Module struct {
 	deps      Deps
 	hasher    PassHasher
 	newNginx  func(confDir string) Nginx
+	newIssuer func() acmeIssuer
 	available func() error
 }
 
@@ -53,6 +54,7 @@ func New(st *store.Store, deps Deps) *Module {
 		deps:      deps,
 		hasher:    newAPR1Hasher(nil),
 		newNginx:  func(confDir string) Nginx { return newRealNginx(confDir) },
+		newIssuer: func() acmeIssuer { return newRealACME() },
 		available: func() error { return newRealNginx("").Available() },
 	}
 }
@@ -106,6 +108,7 @@ func (m *Module) Routes(r module.Router) {
 
 	r.Get("/sites/{id}/ssl", m.handleGetSSL)
 	r.Put("/sites/{id}/ssl", m.handlePutSSL)
+	r.Post("/sites/{id}/ssl/acme", m.handleACMEIssue)
 
 	r.Get("/sites/{id}/logs", m.handleLogs)
 	r.Put("/sites/{id}/logs", m.handlePutLogConfig)

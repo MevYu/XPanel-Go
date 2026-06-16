@@ -26,19 +26,33 @@ func testSettings() Settings {
 
 // mockNginx 记录调用顺序与配置内容,可模拟 nginx -t 失败。
 type mockNginx struct {
-	configs   map[string]string
-	htpasswds map[string]string
-	logs      map[string]string // path -> content
-	testErr   error             // 非 nil 时 Test() 失败
-	reloadErr error
-	reloads   int
-	tests     int
-	writes    int
-	removes   int
+	configs    map[string]string
+	htpasswds  map[string]string
+	logs       map[string]string // path -> content
+	challenges map[string]string // token -> content (currently placed)
+	chalWrites []string          // tokens ever written
+	chalRemd   []string          // tokens removed
+	testErr    error             // 非 nil 时 Test() 失败
+	reloadErr  error
+	reloads    int
+	tests      int
+	writes     int
+	removes    int
 }
 
 func newMockNginx() *mockNginx {
-	return &mockNginx{configs: map[string]string{}, htpasswds: map[string]string{}, logs: map[string]string{}}
+	return &mockNginx{configs: map[string]string{}, htpasswds: map[string]string{}, logs: map[string]string{}, challenges: map[string]string{}}
+}
+
+func (n *mockNginx) WriteChallenge(_, token, content string) error {
+	n.challenges[token] = content
+	n.chalWrites = append(n.chalWrites, token)
+	return nil
+}
+func (n *mockNginx) RemoveChallenge(_, token string) error {
+	delete(n.challenges, token)
+	n.chalRemd = append(n.chalRemd, token)
+	return nil
 }
 
 func (n *mockNginx) WriteConfig(name, content string) error {

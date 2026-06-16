@@ -19,12 +19,16 @@ type Domain struct {
 }
 
 // SSL 描述站点的 TLS 配置。证书/私钥以文件路径引用(不入库明文)。
+// ACME* 字段仅在 Let's Encrypt 签发后填充,用于自动续期;不渲染进 nginx 配置。
 type SSL struct {
-	Enabled    bool   `json:"ssl_enabled"`
-	CertPath   string `json:"cert_path"`
-	KeyPath    string `json:"key_path"`
-	ForceHTTPS bool   `json:"force_https"` // 开启时 80 块 301 跳 443
-	HSTS       bool   `json:"hsts"`        // 开启时 443 块加 Strict-Transport-Security
+	Enabled     bool     `json:"ssl_enabled"`
+	CertPath    string   `json:"cert_path"`
+	KeyPath     string   `json:"key_path"`
+	ForceHTTPS  bool     `json:"force_https"`  // 开启时 80 块 301 跳 443
+	HSTS        bool     `json:"hsts"`         // 开启时 443 块加 Strict-Transport-Security
+	ACMEEmail   string   `json:"acme_email"`   // 签发账户邮箱;非空表示证书由 ACME 自动签发,参与续期
+	ACMEDomains []string `json:"acme_domains"` // 签发覆盖的域名,续期时复用
+	ExpiresAt   int64    `json:"expires_at"`   // 证书 NotAfter(unix 秒),续期判定用
 }
 
 // DirProtect 是一条目录密码保护(auth_basic)。PassHash 为 htpasswd 兼容哈希,绝不明文。

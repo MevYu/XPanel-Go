@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -33,6 +34,43 @@ type Nginx interface {
 	OpenLog(path string) (io.ReadCloser, error)
 	// WriteCert 把上传的证书/私钥 PEM 写到 confDir/ssl/<name>/,返回两文件绝对路径。
 	WriteCert(name, certPEM, keyPEM string) (certPath, keyPath string, err error)
+	// WriteChallenge 把 ACME HTTP-01 应答写到 webroot/.well-known/acme-challenge/<token>。
+	// token 必须匹配 [A-Za-z0-9_-]{1,128};路径不得逃出 webroot。
+	WriteChallenge(webroot, token, content string) error
+	// RemoveChallenge 删除已放置的 ACME 应答文件。不存在视为成功。
+	RemoveChallenge(webroot, token string) error
+}
+
+// acmeTokenRe 限定 HTTP-01 token 字符集,防路径穿越。
+var acmeTokenRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// challengePath 计算应答文件绝对路径,二次校验 token 防穿越。
+func challengePath(webroot, token string) (string, error) {
+	if !acmeTokenRe.MatchString(token) {
+		return "", fmt.Errorf("invalid acme token")
+	}
+	dir := filepath.Join(webroot, ".well-known", "acme-challenge")
+	p := filepath.Join(dir, token)
+	if filepath.Dir(p) != filepath.Clean(dir) {
+		return "", fmt.Errorf("challenge path escapes dir")
+	}
+	return p, nil
+}
+
+func (n *realNginx) WriteChallenge(webroot, token, content string) error {
+	p, err := challengePath(webroot, token)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Dir(p), p, content, 0o644)
+}
+
+func (n *realNginx) RemoveChallenge(webroot, token string) error {
+	p, err := challengePath(webroot, token)
+	if err != nil {
+		return err
+	}
+	return removeIfExists(p)
 }
 
 // realNginx 用 nginx CLI 实现。confDir 必须经设置校验为安全绝对目录。
