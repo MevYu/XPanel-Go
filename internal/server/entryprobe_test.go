@@ -25,6 +25,19 @@ func TestEntryProbeBansAfterThreshold(t *testing.T) {
 	}
 }
 
+func TestEntryProbeSetThresholds(t *testing.T) {
+	now := time.Unix(1000, 0)
+	var banned []string
+	g := NewEntryProbeGuard(10, time.Hour, func(ip string) { banned = append(banned, ip) }, func() time.Time { return now })
+
+	g.SetThresholds(0, time.Minute)
+	ip := "8.8.8.8"
+	g.Probe(ip) // max=0 -> 单次探测即 > max,触发封禁
+	if len(banned) != 1 || banned[0] != ip {
+		t.Fatalf("after SetThresholds(0), a single probe should ban, got %v", banned)
+	}
+}
+
 func TestEntryProbeUnderThresholdNoBan(t *testing.T) {
 	now := time.Unix(1000, 0)
 	var banned []string

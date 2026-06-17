@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/MevYu/XPanel-Go/internal/auth"
+	"github.com/MevYu/XPanel-Go/internal/config"
 	"github.com/MevYu/XPanel-Go/internal/module"
 	webui "github.com/MevYu/XPanel-Go/web"
 )
@@ -57,7 +58,7 @@ type LoginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err er
 // trusted 为受信反代网段(来自 config.TrustedProxies);空=只信 RemoteAddr、忽略 XFF。
 // entryPath 为隐藏面板入口路径;SPA 只在此路径下提供,其余非 API/静态请求返回 404。
 // probe 守卫(非 nil 时)记录入口探测命中,超阈值经其内部封禁该 IP。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard, loginSecret []byte) http.Handler {
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard, loginSecret []byte, cfg *config.Config, banGuard *auth.IPBanGuard, audit func(*int64, string, string, string)) http.Handler {
 	clientIP := clientIPFunc(trusted)
 	login := newLoginCookie(loginSecret)
 	r := chi.NewRouter()
@@ -112,6 +113,19 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 		r.Use(RequireAuth(parse))
 		r.Mount("/api/modules", module.ModuleAPI(reg, mgr, PrincipalFromRequest))
 		module.Mount(r, reg, mgr)
+		// 面板设置始终可用(非模块),仅 admin 可读写;cfg==nil 时不注册(基础测试栈)。
+		if cfg != nil {
+			sh := &settingsHandlers{
+				cfg:      cfg,
+				saveCfg:  func(c *config.Config) error { return c.Save() },
+				banGuard: banGuard,
+				probe:    probe,
+				audit:    audit,
+				clientIP: clientIP,
+			}
+			r.Get("/api/settings", sh.handleGet)
+			r.Put("/api/settings", sh.handlePut)
+		}
 	})
 
 	// catch-all:非 API/公开路由交给 SPA(静态资源或 index.html 回退)。
