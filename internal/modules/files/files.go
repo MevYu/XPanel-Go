@@ -40,7 +40,14 @@ type Module struct {
 	root   string // 面板文件根的绝对路径,所有面板操作限定其内
 	deps   Deps
 	shares *shareStore
+	trash  string       // 回收站目录的绝对路径(面板根内的 .xpanel-trash)
 	pubLim *rateLimiter // 公开端点独立限速
+
+	// 外部副作用抽象,测试可注入 mock(零真实命令/网络)。
+	chown       func(args []string) error                // 执行 chown,args 为参数数组
+	lookupUser  func(name string) (string, error)        // 校验用户存在
+	lookupGroup func(name string) (string, error)        // 校验组存在
+	httpGet     func(url string) (*http.Response, error) // 远程下载抓取(已套 SSRF 安全 transport)
 }
 
 // New 构造模块。root 为面板文件根(绝对路径);st 用于自管分享表。
@@ -60,11 +67,17 @@ func New(root string, st *store.Store, deps Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	cleanRoot := filepath.Clean(abs)
 	return &Module{
-		root:   filepath.Clean(abs),
-		deps:   deps,
-		shares: ss,
-		pubLim: newRateLimiter(20), // 公开端点更严:每 IP 20 burst
+		root:        cleanRoot,
+		deps:        deps,
+		shares:      ss,
+		trash:       filepath.Join(cleanRoot, trashDirName),
+		pubLim:      newRateLimiter(20), // 公开端点更严:每 IP 20 burst
+		chown:       runChown,
+		lookupUser:  lookupSystemUser,
+		lookupGroup: lookupSystemGroup,
+		httpGet:     safeHTTPGet,
 	}, nil
 }
 
@@ -105,8 +118,18 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/copy", m.requireWrite(m.handleCopy))
 	r.Post("/delete", m.requireWrite(m.handleDelete))
 	r.Post("/chmod", m.requireWrite(m.handleChmod))
+	r.Post("/chown", m.handleChown) // 内部自查 admin
 	r.Post("/compress", m.requireWrite(m.handleCompress))
 	r.Post("/extract", m.requireWrite(m.handleExtract))
+	r.Post("/move", m.requireWrite(m.handleMove))
+	r.Get("/search", m.handleSearch)
+	r.Get("/dirsize", m.handleDirSize)
+	r.Post("/remote-download", m.handleRemoteDownload) // 内部自查 admin + X-Confirm-Danger
+
+	// 回收站(软删):删除走软删进回收站;清空为危险操作。
+	r.Get("/trash", m.handleTrashList)
+	r.Post("/trash/restore", m.requireWrite(m.handleTrashRestore))
+	r.Post("/trash/empty", m.handleTrashEmpty) // 内部自查 admin + X-Confirm-Danger
 
 	// 分享管理:创建/列出/撤销(创建需 operator/admin,列/撤销仅创建者或 admin)
 	r.Post("/shares", m.requireWrite(m.handleShareCreate))
@@ -144,6 +167,8 @@ type dirEntry struct {
 	Size    int64  `json:"size"`
 	Mode    string `json:"mode"`
 	ModTime int64  `json:"mod_time"`
+	Owner   string `json:"owner"` // 属主用户名(uid 反查;查不到为数字串)
+	Group   string `json:"group"` // 属主组名(gid 反查;查不到为数字串)
 }
 
 func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
@@ -163,9 +188,11 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		owner, group := statOwner(info.Sys())
 		out = append(out, dirEntry{
 			Name: e.Name(), IsDir: e.IsDir(), Size: info.Size(),
 			Mode: info.Mode().String(), ModTime: info.ModTime().Unix(),
+			Owner: owner, Group: group,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -333,25 +360,6 @@ func (m *Module) handleCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.audit(r, "files.copy", req.From+" -> "+req.To)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
-	rel := r.URL.Query().Get("path")
-	abs, err := m.resolve(rel)
-	if err != nil {
-		pathError(w, err)
-		return
-	}
-	if abs == m.root {
-		http.Error(w, "refusing to delete root", http.StatusBadRequest)
-		return
-	}
-	if err := os.RemoveAll(abs); err != nil {
-		fsError(w, err)
-		return
-	}
-	m.audit(r, "files.delete", rel)
 	w.WriteHeader(http.StatusNoContent)
 }
 
