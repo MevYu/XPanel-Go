@@ -61,10 +61,24 @@ func (p *mockPacker) unpack(_, siteDest, _ string) (bool, error) {
 	return p.hasDB, nil
 }
 
-type mockDumper struct{ called bool }
+type mockDumper struct {
+	called  bool
+	err     error         // 非空则 dump 返回该错误(注入导出失败)
+	started chan struct{} // 非空时:dump 启动后关闭,供测试感知任务已在跑
+	release chan struct{} // 非空时:dump 阻塞直到该通道关闭/有信号
+}
 
 func (d *mockDumper) dump(_, _, dest string, _ Settings) (int64, error) {
 	d.called = true
+	if d.started != nil {
+		close(d.started)
+	}
+	if d.release != nil {
+		<-d.release
+	}
+	if d.err != nil {
+		return 0, d.err
+	}
 	return 0, nil
 }
 
@@ -198,8 +212,13 @@ func TestExportSucceedsAndAudits(t *testing.T) {
 	body, _ := json.Marshal(exportRequest{SitePath: site, Domain: "ex.com", DBKind: "mysql", DBName: "shop"})
 	rec := httptest.NewRecorder()
 	router(m).ServeHTTP(rec, httptest.NewRequest("POST", "/export", bytes.NewReader(body)))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("export should 201, got %d (%s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("export should 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	id := taskIDFromBody(t, rec.Body.Bytes())
+	task := waitTask(t, m, id)
+	if task.Status != "success" {
+		t.Fatalf("export task should succeed, got %+v", task)
 	}
 	if !mp.packed || !md.called {
 		t.Errorf("expected pack+dump called: pack=%v dump=%v", mp.packed, md.called)
@@ -207,15 +226,13 @@ func TestExportSucceedsAndAudits(t *testing.T) {
 	if audited != 1 {
 		t.Errorf("export should audit once, got %d", audited)
 	}
-	var pkg Package
-	_ = json.Unmarshal(rec.Body.Bytes(), &pkg)
-	if pkg.Size != 123 || pkg.DBName != "shop" {
-		t.Errorf("package record wrong: %+v", pkg)
-	}
 	// 落库可查
 	list, _ := m.ms.listPackages()
 	if len(list) != 1 {
 		t.Errorf("expected 1 package recorded, got %d", len(list))
+	}
+	if list[0].Size != 123 || list[0].DBName != "shop" {
+		t.Errorf("package record wrong: %+v", list[0])
 	}
 }
 
@@ -279,8 +296,12 @@ func TestImportRestoresSiteAndDBAndAudits(t *testing.T) {
 	req.Header.Set("X-Confirm-Danger", "yes")
 	rec := httptest.NewRecorder()
 	router(m).ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("import should 204, got %d (%s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("import should 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	task := waitTask(t, m, taskIDFromBody(t, rec.Body.Bytes()))
+	if task.Status != "success" {
+		t.Fatalf("import task should succeed, got %+v", task)
 	}
 	if !mp.unpacked || !mr.called {
 		t.Errorf("expected unpack+restore: unpack=%v restore=%v", mp.unpacked, mr.called)
@@ -306,8 +327,12 @@ func TestImportSiteOnlySkipsRestore(t *testing.T) {
 	req.Header.Set("X-Confirm-Danger", "yes")
 	rec := httptest.NewRecorder()
 	router(m).ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("import should 204, got %d", rec.Code)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("import should 202, got %d", rec.Code)
+	}
+	task := waitTask(t, m, taskIDFromBody(t, rec.Body.Bytes()))
+	if task.Status != "success" {
+		t.Fatalf("import task should succeed, got %+v", task)
 	}
 	if mr.called {
 		t.Error("restore must not run when import_db=false")

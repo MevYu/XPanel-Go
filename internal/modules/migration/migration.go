@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -41,21 +42,29 @@ type Module struct {
 	pk  packer
 	dmp dumper
 	rst restorer
+
+	// 异步任务生命周期。状态跨 goroutine 经 store(DB)同步,这里只管取消信号与等待。
+	wg     sync.WaitGroup
+	mu     sync.Mutex // 仅保护 cancel(Start/Stop 可被 Manager 串行调用)
+	cancel context.CancelFunc
 }
 
 // New 建表并返回模块。建表失败直接 panic:模块无法工作。
+// 在 New 里就备好 cancel,使未经 Start 的调用方(测试)Stop 时也能解除等待。
 func New(st *store.Store, deps Deps) *Module {
 	ms, err := newMigrationStore(st)
 	if err != nil {
 		panic("migration: init store: " + err.Error())
 	}
-	return &Module{
+	m := &Module{
 		ms:   ms,
 		deps: deps,
 		pk:   tarPacker{},
 		dmp:  cmdDumper{},
 		rst:  cmdRestorer{},
 	}
+	_, m.cancel = context.WithCancel(context.Background())
+	return m
 }
 
 func (*Module) Meta() module.ModuleMeta {
@@ -66,8 +75,25 @@ func (*Module) Nav() []module.NavItem {
 	return []module.NavItem{{Label: "一键迁移", Icon: "truck", Path: "/migration"}}
 }
 
-func (*Module) Start(context.Context) error { return nil }
-func (*Module) Stop(context.Context) error  { return nil }
+// Start 由 Manager 在模块启用时调用,必须快速返回。cancel 仅用于 Stop 时发出停机信号。
+func (m *Module) Start(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, m.cancel = context.WithCancel(ctx)
+	return nil
+}
+
+// Stop 触发取消并等待在飞任务 goroutine 收尾(不泄漏)。任务体本身未做中途取消感知,
+// 这里等待当前任务体跑完即可。
+func (m *Module) Stop(context.Context) error {
+	m.mu.Lock()
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.mu.Unlock()
+	m.wg.Wait()
+	return nil
+}
 
 // HealthCheck:打包用 stdlib(archive/tar+gzip),mysqldump/mysql 缺失只影响带库迁移,
 // 运行时报错,不阻止启用。
@@ -82,8 +108,11 @@ func (m *Module) Routes(r module.Router) {
 	r.Delete("/packages/{id}", m.handleDeletePackage)  // admin:删除迁移包
 	r.Get("/packages/{id}/manifest", m.handleManifest) // admin:预览包内元信息
 
-	r.Post("/export", m.handleExport) // admin:导出(打包站点+库+元信息)
-	r.Post("/import", m.handleImport) // 危险:admin + X-Confirm-Danger(覆盖站点/库)
+	r.Post("/export", m.handleExport) // admin:导出(打包站点+库+元信息),异步,返回 task_id
+	r.Post("/import", m.handleImport) // 危险:admin + X-Confirm-Danger(覆盖站点/库),异步
+
+	r.Get("/tasks", m.handleListTasks)    // admin:任务列表(新到旧)
+	r.Get("/tasks/{id}", m.handleGetTask) // admin:单任务进度/状态
 }
 
 // requireAdmin 统一管理员门;非 admin 返回 false 并已写响应。
@@ -269,14 +298,28 @@ func (m *Module) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pkg, err := m.runExport(in)
+	task, err := m.ms.createTask("export")
 	if err != nil {
-		log.Printf("migration: export failed: %v", err)
-		http.Error(w, "export failed: "+safeErr(err), http.StatusInternalServerError)
+		http.Error(w, "task create failed", http.StatusInternalServerError)
 		return
 	}
-	m.deps.Audit(&uid, "migration.export", fmt.Sprintf("%s -> %s", in.SitePath, pkg.Filename), m.clientIP(r))
-	writeJSON(w, http.StatusCreated, pkg)
+	m.deps.Audit(&uid, "migration.export", in.SitePath, m.clientIP(r))
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		_ = m.ms.updateTaskRunning(task.ID)
+		_ = m.ms.updateTaskProgress(task.ID, 50, "packing")
+		pkg, err := m.runExport(in)
+		if err != nil {
+			log.Printf("migration: export task %d failed: %v", task.ID, err)
+			_ = m.ms.finishTask(task.ID, "failed", safeErr(err))
+			return
+		}
+		_ = m.ms.finishTask(task.ID, "success", pkg.Filename)
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]int64{"task_id": task.ID})
 }
 
 // runExport 打包站点目录(+ 可选数据库转储)+ 元信息到迁移暂存目录,落库记录。
@@ -378,13 +421,57 @@ func (m *Module) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := m.runImport(pkg, in); err != nil {
-		log.Printf("migration: import failed: %v", err)
-		http.Error(w, "import failed: "+safeErr(err), http.StatusInternalServerError)
+	task, err := m.ms.createTask("import")
+	if err != nil {
+		http.Error(w, "task create failed", http.StatusInternalServerError)
 		return
 	}
 	m.deps.Audit(&uid, "migration.import", fmt.Sprintf("%s -> %s (db=%t)", pkg.Filename, in.SiteDest, in.ImportDB), m.clientIP(r))
-	w.WriteHeader(http.StatusNoContent)
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		_ = m.ms.updateTaskRunning(task.ID)
+		_ = m.ms.updateTaskProgress(task.ID, 50, "restoring")
+		if err := m.runImport(pkg, in); err != nil {
+			log.Printf("migration: import task %d failed: %v", task.ID, err)
+			_ = m.ms.finishTask(task.ID, "failed", safeErr(err))
+			return
+		}
+		_ = m.ms.finishTask(task.ID, "success", pkg.Filename)
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]int64{"task_id": task.ID})
+}
+
+// --- tasks ---
+
+func (m *Module) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	if _, ok := m.requireAdmin(w, r); !ok {
+		return
+	}
+	list, err := m.ms.listTasks()
+	if err != nil {
+		http.Error(w, "list failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (m *Module) handleGetTask(w http.ResponseWriter, r *http.Request) {
+	if _, ok := m.requireAdmin(w, r); !ok {
+		return
+	}
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	task, err := m.ms.getTask(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 // runImport 解包站点文件到 site_dest,可选把包内数据库转储导入目标库。绝不执行包内任何文件。
