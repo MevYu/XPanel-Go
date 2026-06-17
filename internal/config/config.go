@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,6 +23,8 @@ type Config struct {
 
 	EntryProbeMax           int `json:"entry_probe_max"`            // 同一 IP 滑动窗口内命中错误路径(入口探测)次数 > 此值即封禁,默认 10
 	EntryProbeWindowMinutes int `json:"entry_probe_window_minutes"` // 入口探测计数的滑动窗口分钟数,默认 60
+
+	path string `json:"-"` // 加载来源文件路径,供 Save 回写;不序列化。
 }
 
 // ParseTrustedProxies 把 TrustedProxies 解析成网段。裸 IP 视为 /32 或 /128。
@@ -69,6 +72,7 @@ func Load(path string) (Config, error) {
 	if _, err := c.DecodedSecret(); err != nil {
 		return Config{}, err
 	}
+	c.path = path
 	// 老配置缺新字段:补默认并回写持久化,使 entry_path 等首次生成后稳定。
 	if c.applyDefaults() {
 		if err := c.save(path); err != nil {
@@ -125,9 +129,50 @@ func randomEntryPath() string {
 	return "/" + string(out)
 }
 
+// Save 把当前配置原子回写到加载来源文件(Load 设置的 path)。path 为空则报错。
+func (c Config) Save() error {
+	if c.path == "" {
+		return errors.New("config: no path to save to (not loaded from file)")
+	}
+	return c.save(c.path)
+}
+
+// save 原子写:先写同目录临时文件(0o600)再 rename,避免崩溃留下半截文件。
+// 序列化完整 Config(含 jwt_secret),保留未由设置端点管理的字段。
 func (c Config) save(path string) error {
-	data, _ := json.MarshalIndent(c, "", "  ")
-	return os.WriteFile(path, data, 0o600)
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // NormalizedEntryPath 返回无尾斜杠的入口路径(根 "/" 除外)。
@@ -165,6 +210,7 @@ func generate(path string) (Config, error) {
 		EntryPath:               randomEntryPath(),
 		EntryProbeMax:           10,
 		EntryProbeWindowMinutes: 60,
+		path:                    path,
 	}
 	if err := c.save(path); err != nil {
 		return Config{}, err

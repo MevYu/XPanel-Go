@@ -29,6 +29,14 @@ func NewEntryProbeGuard(max int, window time.Duration, ban func(ip string), now 
 	}
 }
 
+// SetThresholds 热更新探测阈值与窗口(设置端点改 config 后即时生效),持锁与 Probe 互斥。
+func (g *EntryProbeGuard) SetThresholds(max int, window time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.max = max
+	g.window = window
+}
+
 // Probe 记该 IP 一次入口探测;窗口内累计次数 > max 时封禁该 IP 并清空其计数。
 func (g *EntryProbeGuard) Probe(ip string) {
 	g.mu.Lock()

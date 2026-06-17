@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +146,110 @@ func TestParseTrustedProxies(t *testing.T) {
 }
 
 func netParse(s string) net.IP { return net.ParseIP(s) }
+
+// atomic Save 必须圆满保留全部字段(含 jwt_secret),且 path 永不序列化。
+func TestSaveRoundTripsAllFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	c.LoginMaxAttempts = 7
+	c.IPBanHours = 99
+	c.EntryProbeMax = 33
+	c.EntryProbeWindowMinutes = 44
+	c.EntryPath = "/customentry"
+	c.TrustedProxies = []string{"10.0.0.0/8", "1.2.3.4"}
+	c.Addr = "0.0.0.0:9000"
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(raw), `"jwt_secret"`) {
+		t.Error("saved config must keep jwt_secret")
+	}
+	if strings.Contains(string(raw), `"path"`) {
+		t.Error("unexported path must never be serialized")
+	}
+
+	c2, err := Load(path)
+	if err != nil {
+		t.Fatalf("re-Load: %v", err)
+	}
+	if c2.LoginMaxAttempts != 7 || c2.IPBanHours != 99 ||
+		c2.EntryProbeMax != 33 || c2.EntryProbeWindowMinutes != 44 ||
+		c2.EntryPath != "/customentry" || c2.Addr != "0.0.0.0:9000" {
+		t.Fatalf("fields not round-tripped: %+v", c2)
+	}
+	if len(c2.TrustedProxies) != 2 || c2.TrustedProxies[0] != "10.0.0.0/8" || c2.TrustedProxies[1] != "1.2.3.4" {
+		t.Fatalf("trusted_proxies not round-tripped: %v", c2.TrustedProxies)
+	}
+	if c2.JWTSecret != c.JWTSecret {
+		t.Error("jwt_secret must survive Save round-trip")
+	}
+}
+
+func TestSaveEmptyPathErrors(t *testing.T) {
+	if err := (Config{}).Save(); err == nil {
+		t.Error("Save with empty path must error")
+	}
+}
+
+func TestValidateEntryPath(t *testing.T) {
+	ok := []struct{ in, want string }{
+		{"abc", "/abc"},
+		{"/abc", "/abc"},
+		{"Ab9", "/Ab9"},
+	}
+	for _, tc := range ok {
+		got, err := ValidateEntryPath(tc.in)
+		if err != nil {
+			t.Errorf("ValidateEntryPath(%q) err = %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ValidateEntryPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	bad := []string{"", "/", "..", "a/b", "a b", strings.Repeat("a", 65)}
+	for _, in := range bad {
+		if _, err := ValidateEntryPath(in); err == nil {
+			t.Errorf("ValidateEntryPath(%q) should error", in)
+		}
+	}
+}
+
+func TestValidateAddr(t *testing.T) {
+	good := []string{"127.0.0.1:8765", ":8765"}
+	for _, in := range good {
+		if err := ValidateAddr(in); err != nil {
+			t.Errorf("ValidateAddr(%q) err = %v", in, err)
+		}
+	}
+	bad := []string{"nope", "1.2.3.4:0", "1.2.3.4:70000", "1.2.3.4"}
+	for _, in := range bad {
+		if err := ValidateAddr(in); err == nil {
+			t.Errorf("ValidateAddr(%q) should error", in)
+		}
+	}
+}
+
+func TestValidateTrustedProxies(t *testing.T) {
+	if err := ValidateTrustedProxies([]string{"10.0.0.0/8", "1.2.3.4"}); err != nil {
+		t.Errorf("valid list err = %v", err)
+	}
+	if err := ValidateTrustedProxies(nil); err != nil {
+		t.Errorf("empty list err = %v", err)
+	}
+	if err := ValidateTrustedProxies([]string{"not-an-ip"}); err == nil {
+		t.Error("invalid entry should error")
+	}
+}
 
 // randomEntryPath 必须产出 "/" + 8 位字母数字,且多次调用不重复。
 func TestRandomEntryPathFormatAndRandomness(t *testing.T) {

@@ -130,6 +130,19 @@ func TestIPBanDirectBan(t *testing.T) {
 	}
 }
 
+func TestIPBanSetThresholds(t *testing.T) {
+	st := newTestStore(t)
+	clock := func() time.Time { return time.Unix(1000, 0) }
+	g, _ := NewIPBanGuard(st, 5, 72*time.Hour, clock)
+
+	g.SetThresholds(1, time.Hour)
+	ip := "7.7.7.7"
+	g.Fail(ip) // 现阈值=1,一次失败即封
+	if !g.Banned(ip) {
+		t.Fatal("after SetThresholds(1), a single failure should ban")
+	}
+}
+
 func TestIPBanResetClearsFailures(t *testing.T) {
 	st := newTestStore(t)
 	clock := func() time.Time { return time.Unix(1000, 0) }

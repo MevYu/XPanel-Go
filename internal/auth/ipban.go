@@ -81,6 +81,14 @@ func (g *IPBanGuard) Ban(ip string) {
 	_ = g.store.BanIP(ip, until)
 }
 
+// SetThresholds 热更新封禁阈值与时长(设置端点改 config 后即时生效),持锁与 Fail/Ban 互斥。
+func (g *IPBanGuard) SetThresholds(maxAttempts int, banDuration time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.maxAttempts = maxAttempts
+	g.banDuration = banDuration
+}
+
 // Reset 清除该 IP 的失败计数(登录成功时调用)。不解除已生效的封禁。
 func (g *IPBanGuard) Reset(ip string) {
 	g.mu.Lock()
