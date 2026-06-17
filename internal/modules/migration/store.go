@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS migration_packages (
 	db_name     TEXT NOT NULL DEFAULT '',
 	size        INTEGER NOT NULL DEFAULT 0,
 	created_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS migration_tasks (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind        TEXT NOT NULL,
+	status      TEXT NOT NULL,
+	progress    INTEGER NOT NULL DEFAULT 0,
+	message     TEXT NOT NULL DEFAULT '',
+	started_at  INTEGER NOT NULL DEFAULT 0,
+	finished_at INTEGER NOT NULL DEFAULT 0
 );`
 
 // Settings 是本模块可配置项。空值回落默认。
@@ -78,7 +87,18 @@ type Package struct {
 	CreatedAt  int64  `json:"created_at"`
 }
 
-// migrationStore 读写两张表。
+// Task 是一次异步导出/导入任务的进度记录。状态机:pending -> running -> success|failed。
+type Task struct {
+	ID         int64  `json:"id"`
+	Kind       string `json:"kind"`        // "export" | "import"
+	Status     string `json:"status"`      // pending | running | success | failed
+	Progress   int    `json:"progress"`    // 0-100
+	Message    string `json:"message"`     // 成功为产物文件名,失败为脱敏错误摘要
+	StartedAt  int64  `json:"started_at"`  // Unix 秒,running 前为 0
+	FinishedAt int64  `json:"finished_at"` // Unix 秒,终态前为 0
+}
+
+// migrationStore 读写三张表。
 type migrationStore struct{ db *sql.DB }
 
 func newMigrationStore(st *store.Store) (*migrationStore, error) {
@@ -184,5 +204,68 @@ func (s *migrationStore) getPackage(id int64) (Package, error) {
 
 func (s *migrationStore) deletePackage(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM migration_packages WHERE id = ?`, id)
+	return err
+}
+
+// --- tasks ---
+
+func (s *migrationStore) createTask(kind string) (Task, error) {
+	res, err := s.db.Exec(`INSERT INTO migration_tasks (kind, status, progress)
+		VALUES (?, 'pending', 0)`, kind)
+	if err != nil {
+		return Task{}, err
+	}
+	id, _ := res.LastInsertId()
+	return Task{ID: id, Kind: kind, Status: "pending"}, nil
+}
+
+func (s *migrationStore) getTask(id int64) (Task, error) {
+	var t Task
+	row := s.db.QueryRow(`SELECT id, kind, status, progress, message, started_at, finished_at
+		FROM migration_tasks WHERE id = ?`, id)
+	err := row.Scan(&t.ID, &t.Kind, &t.Status, &t.Progress, &t.Message, &t.StartedAt, &t.FinishedAt)
+	return t, err
+}
+
+func (s *migrationStore) listTasks() ([]Task, error) {
+	rows, err := s.db.Query(`SELECT id, kind, status, progress, message, started_at, finished_at
+		FROM migration_tasks ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Task{}
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Kind, &t.Status, &t.Progress, &t.Message, &t.StartedAt, &t.FinishedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *migrationStore) updateTaskRunning(id int64) error {
+	_, err := s.db.Exec(`UPDATE migration_tasks SET status = 'running', started_at = ?
+		WHERE id = ?`, time.Now().Unix(), id)
+	return err
+}
+
+func (s *migrationStore) updateTaskProgress(id int64, progress int, message string) error {
+	_, err := s.db.Exec(`UPDATE migration_tasks SET progress = ?, message = ? WHERE id = ?`,
+		progress, message, id)
+	return err
+}
+
+// finishTask 落终态:success 进度强制 100,记录 finished_at。
+func (s *migrationStore) finishTask(id int64, status, message string) error {
+	now := time.Now().Unix()
+	if status == "success" {
+		_, err := s.db.Exec(`UPDATE migration_tasks SET status = ?, progress = 100,
+			message = ?, finished_at = ? WHERE id = ?`, status, message, now, id)
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE migration_tasks SET status = ?, message = ?,
+		finished_at = ? WHERE id = ?`, status, message, now, id)
 	return err
 }
