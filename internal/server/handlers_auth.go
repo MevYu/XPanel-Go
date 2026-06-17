@@ -16,6 +16,8 @@ type authHandlers struct {
 	svc *auth.Service
 	// totp 为登录时的 2FA 校验器;nil 表示不启用登录 2FA 门(如基础 server.New)。
 	totp loginTOTPVerifier
+	// recordLogin 在登录成功后记录最近登录时间;nil 表示不记录(如基础 server.New)。
+	recordLogin func(userID int64)
 }
 
 type loginReq struct {
@@ -58,6 +60,9 @@ func (a *authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.svc.Audit(&u.ID, "login.success", "", ip)
+	if a.recordLogin != nil {
+		a.recordLogin(u.ID)
+	}
 	tok, err := a.svc.IssueFor(u.ID, u.Role)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

@@ -194,3 +194,59 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("want MyPanel, got %q", v)
 	}
 }
+
+func TestRecordLogin(t *testing.T) {
+	us, _ := newTestStore(t)
+	id, err := us.createUser("alice", "h", "admin")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// 新建用户尚未登录:last_login_at 为空。
+	list, err := us.listUsers()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 || list[0].LastLoginAt != nil {
+		t.Fatalf("want nil LastLoginAt before login, got %+v", list[0])
+	}
+
+	const ts int64 = 1_700_000_000
+	if err := us.recordLogin(id, ts); err != nil {
+		t.Fatalf("recordLogin: %v", err)
+	}
+	list, _ = us.listUsers()
+	if list[0].LastLoginAt == nil || *list[0].LastLoginAt != ts {
+		t.Fatalf("want LastLoginAt=%d, got %+v", ts, list[0].LastLoginAt)
+	}
+
+	// 再次登录覆盖为新时间戳。
+	const ts2 int64 = 1_700_009_999
+	if err := us.recordLogin(id, ts2); err != nil {
+		t.Fatalf("recordLogin 2: %v", err)
+	}
+	list, _ = us.listUsers()
+	if list[0].LastLoginAt == nil || *list[0].LastLoginAt != ts2 {
+		t.Fatalf("want LastLoginAt=%d, got %+v", ts2, list[0].LastLoginAt)
+	}
+}
+
+// TestNewUserStoreColumnIdempotent 验证 last_login_at 列的 ALTER 幂等:
+// 旧库(列已存在)再次 newUserStore 不报错,旧行 last_login_at 读出为 nil。
+func TestLastLoginColumnIdempotent(t *testing.T) {
+	us, st := newTestStore(t)
+	if _, err := us.createUser("bob", "h", "admin"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// 模拟重启:列已存在,再次建店不应报错。
+	if _, err := newUserStore(st); err != nil {
+		t.Fatalf("second newUserStore should be idempotent: %v", err)
+	}
+	list, err := us.listUsers()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 || list[0].LastLoginAt != nil {
+		t.Fatalf("legacy row should read nil LastLoginAt, got %+v", list[0])
+	}
+}
