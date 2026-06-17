@@ -5,12 +5,27 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"io/fs"
 	"net/http"
 	"path"
 	"strings"
 )
+
+type nonceCtxKey struct{}
+
+// WithNonce 把本次响应的 CSP nonce 放进 context,供 SPA handler 给注入的内联
+// base 脚本打上同一个 nonce。由 server.SecurityHeaders 中间件填充。
+func WithNonce(ctx context.Context, nonce string) context.Context {
+	return context.WithValue(ctx, nonceCtxKey{}, nonce)
+}
+
+// NonceFromContext 取出本次响应的 CSP nonce;无则返回空串。
+func NonceFromContext(ctx context.Context) string {
+	n, _ := ctx.Value(nonceCtxKey{}).(string)
+	return n
+}
 
 //go:embed all:dist
 var distFS embed.FS
@@ -60,13 +75,12 @@ func HandlerWithBase(entryPath string) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	index := injectBase(rawIndex, entryPath)
 	files := http.FileServer(http.FS(sub))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if p == "" {
-			serveIndex(w, index)
+			serveIndex(w, rawIndex, entryPath, NonceFromContext(r.Context()))
 			return
 		}
 		if f, err := sub.Open(p); err == nil {
@@ -81,13 +95,18 @@ func HandlerWithBase(entryPath string) http.Handler {
 			}
 			f.Close()
 		}
-		serveIndex(w, index)
+		serveIndex(w, rawIndex, entryPath, NonceFromContext(r.Context()))
 	})
 }
 
 // injectBase 在 </head> 前插入 window.__XPANEL_BASE__ 脚本,供前端设置 basename。
-func injectBase(index []byte, entryPath string) []byte {
-	snippet := []byte(`<script>window.__XPANEL_BASE__="` + entryPath + `";</script>`)
+// nonce 非空时给 <script> 标签打上 nonce 属性,配合 CSP script-src 'nonce-...' 放行。
+func injectBase(index []byte, entryPath, nonce string) []byte {
+	openTag := "<script>"
+	if nonce != "" {
+		openTag = `<script nonce="` + nonce + `">`
+	}
+	snippet := []byte(openTag + `window.__XPANEL_BASE__="` + entryPath + `";</script>`)
 	if i := bytes.Index(index, []byte("</head>")); i >= 0 {
 		out := make([]byte, 0, len(index)+len(snippet))
 		out = append(out, index[:i]...)
@@ -99,8 +118,8 @@ func injectBase(index []byte, entryPath string) []byte {
 	return append(snippet, index...)
 }
 
-func serveIndex(w http.ResponseWriter, index []byte) {
+func serveIndex(w http.ResponseWriter, rawIndex []byte, entryPath, nonce string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(index)
+	_, _ = w.Write(injectBase(rawIndex, entryPath, nonce))
 }

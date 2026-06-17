@@ -2,23 +2,56 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	webui "github.com/MevYu/XPanel-Go/web"
 )
 
-// SecurityHeaders 给所有响应加固定安全头。CSP 禁内联脚本,前端需用打包后的 JS。
+// SecurityHeaders 给所有响应加固定安全头。
+// CSP 用每响应唯一的 nonce 放行注入的内联 base 脚本(不开 script-src unsafe-inline);
+// nonce 同时写进 CSP 头与 request context,SPA handler 据此给 <script> 打同一 nonce。
+// style-src/font-src/img-src 显式放行,避免自托管字体与运行时内联 style 被回退到
+// default-src 误伤。
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nonce := newNonce()
 		h := w.Header()
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy", "default-src 'self'; object-src 'none'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
+		h.Set("Content-Security-Policy", cspHeader(nonce))
+		next.ServeHTTP(w, r.WithContext(webui.WithNonce(r.Context(), nonce)))
 	})
+}
+
+// cspHeader 拼出带 nonce 的 CSP。script 仅 self+nonce(拒 unsafe-inline);
+// style 放 unsafe-inline(React/图表运行时内联 style 必需,风险低);
+// font/img 放 data:;connect self;object/base/frame-ancestors 收紧。
+func cspHeader(nonce string) string {
+	return "default-src 'self'; " +
+		"script-src 'self' 'nonce-" + nonce + "'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"font-src 'self' data:; " +
+		"img-src 'self' data:; " +
+		"connect-src 'self'; " +
+		"object-src 'none'; " +
+		"base-uri 'self'; " +
+		"frame-ancestors 'none'"
+}
+
+// newNonce 生成每响应唯一的 base64 CSP nonce(16 字节 crypto/rand)。
+func newNonce() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand 失败意味着系统熵源不可用,无法安全继续
+	}
+	return base64.StdEncoding.EncodeToString(b[:])
 }
 
 // remoteIP 取 RemoteAddr 的纯 IP(去端口)。解析失败回退原值。
