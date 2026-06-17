@@ -93,6 +93,16 @@ func (s *supStore) create(p Program) (int64, error) {
 	return res.LastInsertId()
 }
 
+// update 改写一条程序的可编辑字段(名称/命令/目录/自启/进程数),并刷新 updated_at。
+// 名称唯一约束冲突时返回错误。
+func (s *supStore) update(p Program) error {
+	_, err := s.db.Exec(`UPDATE supervisor_programs
+		SET name = ?, command = ?, directory = ?, auto_restart = ?, numprocs = ?, updated_at = ?
+		WHERE id = ?`,
+		p.Name, p.Command, p.Directory, boolToInt(p.AutoRestart), p.Numprocs, time.Now().Unix(), p.ID)
+	return err
+}
+
 func (s *supStore) delete(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM supervisor_programs WHERE id = ?`, id)
 	return err
