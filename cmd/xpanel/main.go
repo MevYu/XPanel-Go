@@ -280,7 +280,12 @@ func main() {
 		banGuard.Ban,
 		time.Now,
 	)
-	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath(), probeGuard, secret, &cfg, banGuard, auditFn)
+	recordLogin := func(userID int64) {
+		if err := users.RecordLogin(st, userID, time.Now().Unix()); err != nil {
+			log.Printf("record login for user %d: %v", userID, err)
+		}
+	}
+	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath(), probeGuard, secret, &cfg, banGuard, auditFn, recordLogin)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,

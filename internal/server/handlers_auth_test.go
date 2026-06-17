@@ -168,6 +168,50 @@ func TestLogin2FA_RequiredDoesNotLock(t *testing.T) {
 	}
 }
 
+// 登录成功后调用注入的 recordLogin,传入登录用户的 ID。
+func TestLoginRecordsLastLogin(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	jm := auth.NewJWTManager([]byte("test-secret-32-bytes-long-xxxxxx"))
+	svc := auth.NewService(st, jm, auth.NewLockout(5, time.Minute, time.Now))
+	svc.Register("admin", "pw-123456", "admin")
+	u, err := svc.VerifyPassword("admin", "pw-123456", "")
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	uid := u.ID
+
+	var got int64 = -1
+	ah := &authHandlers{svc: svc, clientIP: remoteIP, recordLogin: func(userID int64) { got = userID }}
+	r := chi.NewRouter()
+	r.Post("/api/auth/login", ah.login)
+
+	rec := postLogin(t, r, `{"username":"admin","password":"pw-123456"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if got != uid {
+		t.Fatalf("recordLogin called with %d, want %d", got, uid)
+	}
+}
+
+// 失败登录不调用 recordLogin。
+func TestFailedLoginDoesNotRecord(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	jm := auth.NewJWTManager([]byte("test-secret-32-bytes-long-xxxxxx"))
+	svc := auth.NewService(st, jm, auth.NewLockout(5, time.Minute, time.Now))
+	svc.Register("admin", "pw-123456", "admin")
+
+	called := false
+	ah := &authHandlers{svc: svc, clientIP: remoteIP, recordLogin: func(int64) { called = true }}
+	r := chi.NewRouter()
+	r.Post("/api/auth/login", ah.login)
+
+	postLogin(t, r, `{"username":"admin","password":"wrong"}`)
+	if called {
+		t.Fatal("recordLogin must not be called on failed login")
+	}
+}
+
 func TestProtectedRouteRequiresToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/me", nil)

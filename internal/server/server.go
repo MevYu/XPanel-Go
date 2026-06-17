@@ -52,13 +52,17 @@ func New(svc *auth.Service, jwt *auth.JWTManager) http.Handler {
 // ok=code 是否通过。宿主用 users.VerifyLoginTOTP 适配并注入,避免 server 依赖其内部。
 type LoginTOTPVerifier func(userID int64, code string) (enabled, ok bool, err error)
 
+// LoginRecorder 在登录成功后记录该用户最近登录时间。宿主用 users.RecordLogin 适配并注入。
+type LoginRecorder func(userID int64)
+
 // NewWithModules 在基础路由上接入模块系统:模块管理 API + 各模块路由(带启用门)。
 // totp 为登录时的 2FA 校验器;传 nil 则不启用登录 2FA 门。
 // ipBanned 报告来源 IP 是否被封禁(传 nil 则不启用 IP 封禁门)。
 // trusted 为受信反代网段(来自 config.TrustedProxies);空=只信 RemoteAddr、忽略 XFF。
 // entryPath 为隐藏面板入口路径;SPA 只在此路径下提供,其余非 API/静态请求返回 404。
 // probe 守卫(非 nil 时)记录入口探测命中,超阈值经其内部封禁该 IP。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard, loginSecret []byte, cfg *config.Config, banGuard *auth.IPBanGuard, audit func(*int64, string, string, string)) http.Handler {
+// recordLogin 登录成功后记录最近登录时间;传 nil 则不记录。
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard, loginSecret []byte, cfg *config.Config, banGuard *auth.IPBanGuard, audit func(*int64, string, string, string), recordLogin LoginRecorder) http.Handler {
 	clientIP := clientIPFunc(trusted)
 	login := newLoginCookie(loginSecret)
 	r := chi.NewRouter()
@@ -98,7 +102,7 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	ah := &authHandlers{svc: svc, totp: loginTOTPVerifier(totp), clientIP: clientIP, loginCookie: login}
+	ah := &authHandlers{svc: svc, totp: loginTOTPVerifier(totp), clientIP: clientIP, loginCookie: login, recordLogin: recordLogin}
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/login", ah.login)
 		r.Post("/refresh", ah.refresh)

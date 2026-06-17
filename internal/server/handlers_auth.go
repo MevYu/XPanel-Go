@@ -19,6 +19,8 @@ type authHandlers struct {
 	clientIP func(*http.Request) string
 	// loginCookie 为已登录态 cookie 签发/校验器;nil 表示不种 cookie(如基础 server.New)。
 	loginCookie *loginCookie
+	// recordLogin 在登录成功后记录最近登录时间;nil 表示不记录(如基础 server.New)。
+	recordLogin func(userID int64)
 }
 
 // setLoginCookie 在真正签发 token 时种登录态 cookie(loginCookie 为 nil 时无操作)。
@@ -65,6 +67,9 @@ func (a *authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.svc.Audit(&u.ID, "login.success", "", ip)
+	if a.recordLogin != nil {
+		a.recordLogin(u.ID)
+	}
 	tok, err := a.svc.IssueFor(u.ID, u.Role)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

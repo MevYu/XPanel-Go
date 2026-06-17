@@ -35,3 +35,13 @@ func VerifyLoginTOTP(st *store.Store, secret string, userID int64, code string) 
 	}
 	return true, totp.Validate(code, string(plain)), nil
 }
+
+// RecordLogin 供宿主在登录成功后记录该用户最近登录时间(Unix 秒)。
+// ts 由调用方传入以便测试;失败不应阻断登录,调用方记录错误即可。
+func RecordLogin(st *store.Store, userID, ts int64) error {
+	us, err := newUserStore(st)
+	if err != nil {
+		return err
+	}
+	return us.recordLogin(userID, ts)
+}

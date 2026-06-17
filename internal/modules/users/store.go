@@ -3,6 +3,7 @@ package users
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/MevYu/XPanel-Go/internal/store"
@@ -22,6 +23,7 @@ type UserInfo struct {
 	Role        string `json:"role"`
 	CreatedAt   int64  `json:"created_at"`
 	TOTPEnabled bool   `json:"totp_enabled"`
+	LastLoginAt *int64 `json:"last_login_at"` // Unix 秒;从未登录为 null
 }
 
 // APIKeyInfo 是 API Key 的元数据视图,绝不含明文或哈希。
@@ -63,13 +65,19 @@ func newUserStore(st *store.Store) (*userStore, error) {
 			return nil, err
 		}
 	}
+	// 中央 users 表加 last_login_at 列(幂等):列已存在时 SQLite 报 "duplicate column name",忽略。
+	// 不动 internal/store/migrations.go——模块自管自己往中央表加的列。
+	if _, err := st.DB.Exec(`ALTER TABLE users ADD COLUMN last_login_at INTEGER`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		return nil, err
+	}
 	return &userStore{db: st.DB}, nil
 }
 
 // --- users (中央表,只读 + 行级写) ---
 
 func (s *userStore) listUsers() ([]UserInfo, error) {
-	rows, err := s.db.Query(`SELECT u.id, u.username, u.role, u.created_at,
+	rows, err := s.db.Query(`SELECT u.id, u.username, u.role, u.created_at, u.last_login_at,
 		COALESCE(t.enabled, 0)
 		FROM users u LEFT JOIN user_totp t ON t.user_id = u.id
 		ORDER BY u.id`)
@@ -81,10 +89,14 @@ func (s *userStore) listUsers() ([]UserInfo, error) {
 	for rows.Next() {
 		var u UserInfo
 		var enabled int
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.CreatedAt, &enabled); err != nil {
+		var lastLogin sql.NullInt64
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.CreatedAt, &lastLogin, &enabled); err != nil {
 			return nil, err
 		}
 		u.TOTPEnabled = enabled != 0
+		if lastLogin.Valid {
+			u.LastLoginAt = &lastLogin.Int64
+		}
 		out = append(out, u)
 	}
 	return out, rows.Err()
@@ -139,6 +151,12 @@ func (s *userStore) setRole(id int64, role string) error {
 
 func (s *userStore) setPassword(id int64, passHash string) error {
 	_, err := s.db.Exec(`UPDATE users SET pass_hash = ? WHERE id = ?`, passHash, id)
+	return err
+}
+
+// recordLogin 写入该用户最近一次登录的 Unix 秒。ts 由调用方传入(便于测试),不取 time.Now()。
+func (s *userStore) recordLogin(id, ts int64) error {
+	_, err := s.db.Exec(`UPDATE users SET last_login_at = ? WHERE id = ?`, ts, id)
 	return err
 }
 
