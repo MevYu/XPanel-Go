@@ -53,9 +53,14 @@ func TestGeneratedDefaultsAndEntryPath(t *testing.T) {
 	if c.EntryProbeWindowMinutes != 60 {
 		t.Errorf("entry_probe_window_minutes default = %d, want 60", c.EntryProbeWindowMinutes)
 	}
-	// entry_path = "/" + 16 hex chars.
-	if len(c.EntryPath) != 17 || c.EntryPath[0] != '/' {
-		t.Fatalf("entry_path = %q, want /<16 hex>", c.EntryPath)
+	// entry_path = "/" + 8 alphanumeric chars.
+	if len(c.EntryPath) != 9 || c.EntryPath[0] != '/' {
+		t.Fatalf("entry_path = %q, want /<8 alnum>", c.EntryPath)
+	}
+	for _, r := range c.EntryPath[1:] {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			t.Fatalf("entry_path token has non-alphanumeric char %q in %q", r, c.EntryPath)
+		}
 	}
 
 	// 稳定:二次加载读回同一 entry_path。
@@ -140,3 +145,24 @@ func TestParseTrustedProxies(t *testing.T) {
 }
 
 func netParse(s string) net.IP { return net.ParseIP(s) }
+
+// randomEntryPath 必须产出 "/" + 8 位字母数字,且多次调用不重复。
+func TestRandomEntryPathFormatAndRandomness(t *testing.T) {
+	const n = 100
+	seen := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		p := randomEntryPath()
+		if len(p) != 9 || p[0] != '/' {
+			t.Fatalf("randomEntryPath = %q, want /<8 alnum>", p)
+		}
+		for _, r := range p[1:] {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+				t.Fatalf("randomEntryPath token has non-alphanumeric char %q in %q", r, p)
+			}
+		}
+		seen[p] = struct{}{}
+	}
+	if len(seen) < n-1 { // 允许极小概率碰撞,但绝不能是常量
+		t.Fatalf("randomEntryPath not random: %d unique out of %d", len(seen), n)
+	}
+}

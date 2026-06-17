@@ -3,7 +3,6 @@ package config
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,13 +104,25 @@ func (c *Config) applyDefaults() bool {
 	return changed
 }
 
-// randomEntryPath 生成 "/" + 16 位十六进制的隐藏入口路径。
+const entryPathAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+// randomEntryPath 生成 "/" + 8 位随机字母数字([a-zA-Z0-9])的隐藏入口路径。
+// 拒绝采样消除模偏置(256 不整除 62)。
 func randomEntryPath() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		panic(err) // crypto/rand 失败属不可恢复
+	const n = 8
+	out := make([]byte, n)
+	buf := make([]byte, 1)
+	for i := 0; i < n; {
+		if _, err := rand.Read(buf); err != nil {
+			panic(err) // crypto/rand 失败属不可恢复
+		}
+		if int(buf[0]) >= 256-(256%len(entryPathAlphabet)) {
+			continue // 落在不均匀尾段,丢弃重取
+		}
+		out[i] = entryPathAlphabet[int(buf[0])%len(entryPathAlphabet)]
+		i++
 	}
-	return "/" + hex.EncodeToString(b)
+	return "/" + string(out)
 }
 
 func (c Config) save(path string) error {
