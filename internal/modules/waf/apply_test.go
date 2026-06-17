@@ -37,7 +37,7 @@ func testSettings(t *testing.T) Settings {
 func TestApplyWritesAndReloadsOnTestPass(t *testing.T) {
 	set := testSettings(t)
 	ng := &mockNginx{}
-	rs := RuleSet{IPRules: []IPRule{{Action: "deny", CIDR: "1.2.3.4", Enabled: true}}, CC: DefaultCCConfig()}
+	rs := RuleSet{GlobalEnabled: true, IPRules: []IPRule{{Action: "deny", CIDR: "1.2.3.4", Enabled: true}}, CC: DefaultCCConfig()}
 
 	if _, err := (applier{ng: ng}).apply(set, rs); err != nil {
 		t.Fatalf("apply: %v", err)

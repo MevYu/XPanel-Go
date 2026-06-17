@@ -8,6 +8,9 @@ import (
 
 // Settings 是 waf 模块的可配置路径与开关,可由 admin 经 PUT /settings 修改。
 type Settings struct {
+	// WAFEnabled 是全局总开关(独立于 cc.enabled)。关闭时生成的配置不拦任何请求,
+	// 即便存在启用的 IP/匹配/CC 规则。关闭它是危险操作(整体卸防护)。
+	WAFEnabled bool `json:"waf_enabled"`
 	// ConfigDir 是生成的 nginx WAF 配置目录。
 	ConfigDir string `json:"config_dir"`
 	// HTTPConfName / ServerConfName 是生成的两段配置文件名(置于 ConfigDir 内)。
@@ -22,6 +25,7 @@ type Settings struct {
 // DefaultSettings 返回出厂默认设置(对标 aaPanel 的常见布局)。
 func DefaultSettings() Settings {
 	return Settings{
+		WAFEnabled:     true,
 		ConfigDir:      "/etc/nginx/waf",
 		HTTPConfName:   "waf_http.conf",
 		ServerConfName: "waf_server.conf",
