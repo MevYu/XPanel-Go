@@ -36,6 +36,9 @@ func newMonitorStore(st *store.Store) (*monitorStore, error) {
 	if _, err := st.DB.Exec(createSnapshotTable); err != nil {
 		return nil, err
 	}
+	if err := initTargetTables(st.DB); err != nil {
+		return nil, err
+	}
 	return &monitorStore{db: st.DB}, nil
 }
 
