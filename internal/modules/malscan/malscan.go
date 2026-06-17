@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 
@@ -65,6 +66,7 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/quarantine", m.handleQuarantine)      // 只读:隔离区列表
 	r.Post("/quarantine", m.handleQuarantineFile) // 危险写:隔离文件,需 admin + 确认
 	r.Post("/restore", m.handleRestore)           // 危险写:移出隔离,需 admin + 确认
+	r.Post("/delete", m.handleDelete)             // 危险写:直接删除命中文件,需 admin + 确认
 	r.Post("/whitelist", m.handleAddWhitelist)    // 写:加白名单,需 operator+
 	r.Delete("/whitelist", m.handleDelWhitelist)  // 写:移除白名单,需 operator+
 }
@@ -300,6 +302,41 @@ func (m *Module) handleRestore(w http.ResponseWriter, r *http.Request) {
 	_ = m.ms.markQuarantined(abs, false)
 	m.deps.Audit(&uid, "malscan.restore", abs, clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{"restored": abs})
+}
+
+// handleDelete 直接删除命中文件:危险操作,需 admin + 二次确认。
+// path 经 SafeJoin 限定在 scan_dir 内,拒绝 ".." 与软链逃逸,绝不动到扫描根之外的文件。
+func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
+	uid, role := m.deps.Principal(r)
+	if role != "admin" {
+		http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
+		return
+	}
+	req, ok := decodePath(w, r)
+	if !ok {
+		return
+	}
+	s, err := m.ms.getSettings()
+	if err != nil {
+		http.Error(w, "settings unavailable", http.StatusInternalServerError)
+		return
+	}
+	abs, err := system.SafeJoin(s.ScanDir, req.Path)
+	if err != nil {
+		http.Error(w, "invalid path: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.Remove(abs); err != nil {
+		log.Printf("malscan: delete %q: %v", abs, err)
+		http.Error(w, "delete failed", http.StatusInternalServerError)
+		return
+	}
+	m.deps.Audit(&uid, "malscan.delete", abs, clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]string{"deleted": abs})
 }
 
 func (m *Module) handleAddWhitelist(w http.ResponseWriter, r *http.Request) {
