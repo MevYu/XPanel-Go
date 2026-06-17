@@ -93,6 +93,15 @@ func (s *wafStore) deleteIP(id int64) (int64, error) {
 	return res.RowsAffected()
 }
 
+// setIPEnabled 翻转单条 IP 规则的启用态;返回受影响行数(0 = 规则不存在)。
+func (s *wafStore) setIPEnabled(id int64, enabled bool) (int64, error) {
+	res, err := s.db.Exec(`UPDATE waf_ip_rules SET enabled = ? WHERE id = ?`, boolToInt(enabled), id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // --- Match rules ---
 
 func (s *wafStore) listMatch() ([]MatchRule, error) {
@@ -125,6 +134,15 @@ func (s *wafStore) createMatch(r MatchRule) (int64, error) {
 
 func (s *wafStore) deleteMatch(id int64) (int64, error) {
 	res, err := s.db.Exec(`DELETE FROM waf_match_rules WHERE id = ?`, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// setMatchEnabled 翻转单条匹配规则的启用态;返回受影响行数(0 = 规则不存在)。
+func (s *wafStore) setMatchEnabled(id int64, enabled bool) (int64, error) {
+	res, err := s.db.Exec(`UPDATE waf_match_rules SET enabled = ? WHERE id = ?`, boolToInt(enabled), id)
 	if err != nil {
 		return 0, err
 	}

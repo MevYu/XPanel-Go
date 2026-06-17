@@ -57,13 +57,15 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/settings", m.handleGetSettings) // 只读:任意已认证角色
 	r.Put("/settings", m.handlePutSettings) // 写:admin
 
-	r.Get("/ip", m.handleListIP)           // 只读
-	r.Post("/ip", m.handleCreateIP)        // 写:admin
-	r.Delete("/ip/{id}", m.handleDeleteIP) // 写:admin
+	r.Get("/ip", m.handleListIP)                // 只读
+	r.Post("/ip", m.handleCreateIP)             // 写:admin
+	r.Delete("/ip/{id}", m.handleDeleteIP)      // 写:admin
+	r.Post("/ip/{id}/toggle", m.handleToggleIP) // 写:admin,翻转单条 IP 规则启停
 
-	r.Get("/match", m.handleListMatch)           // 只读
-	r.Post("/match", m.handleCreateMatch)        // 写:admin
-	r.Delete("/match/{id}", m.handleDeleteMatch) // 写:admin
+	r.Get("/match", m.handleListMatch)                // 只读
+	r.Post("/match", m.handleCreateMatch)             // 写:admin
+	r.Delete("/match/{id}", m.handleDeleteMatch)      // 写:admin
+	r.Post("/match/{id}/toggle", m.handleToggleMatch) // 写:admin,翻转单条匹配规则启停
 
 	r.Get("/cc", m.handleGetCC) // 只读
 	r.Put("/cc", m.handlePutCC) // 写:admin
@@ -107,11 +109,23 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// 关闭全局总开关 = 整体卸防护,属危险操作:需 X-Confirm-Danger。
+	if !s.WAFEnabled {
+		cur, err := m.ws.getSettings()
+		if err != nil {
+			serverError(w, "load settings", err)
+			return
+		}
+		if cur.WAFEnabled && !confirmed(r) {
+			http.Error(w, "disabling WAF requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+			return
+		}
+	}
 	if err := m.ws.setSettings(s); err != nil {
 		serverError(w, "save settings", err)
 		return
 	}
-	m.deps.Audit(&uid, "waf.settings.update", s.ConfigDir, clientIP(r))
+	m.deps.Audit(&uid, "waf.settings.update", "waf_enabled="+strconv.FormatBool(s.WAFEnabled), clientIP(r))
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -175,6 +189,32 @@ func (m *Module) handleDeleteIP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (m *Module) handleToggleIP(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var body toggleBody
+	if !decode(w, r, &body) {
+		return
+	}
+	n, err := m.ws.setIPEnabled(id, body.Enabled)
+	if err != nil {
+		serverError(w, "toggle ip", err)
+		return
+	}
+	if n == 0 {
+		http.Error(w, "rule not found", http.StatusNotFound)
+		return
+	}
+	m.deps.Audit(&uid, "waf.ip.toggle", strconv.FormatInt(id, 10)+" enabled="+strconv.FormatBool(body.Enabled), clientIP(r))
+	writeJSON(w, http.StatusOK, body)
+}
+
 // --- Match rules ---
 
 func (m *Module) handleListMatch(w http.ResponseWriter, _ *http.Request) {
@@ -234,6 +274,32 @@ func (m *Module) handleDeleteMatch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (m *Module) handleToggleMatch(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var body toggleBody
+	if !decode(w, r, &body) {
+		return
+	}
+	n, err := m.ws.setMatchEnabled(id, body.Enabled)
+	if err != nil {
+		serverError(w, "toggle match", err)
+		return
+	}
+	if n == 0 {
+		http.Error(w, "rule not found", http.StatusNotFound)
+		return
+	}
+	m.deps.Audit(&uid, "waf.match.toggle", strconv.FormatInt(id, 10)+" enabled="+strconv.FormatBool(body.Enabled), clientIP(r))
+	writeJSON(w, http.StatusOK, body)
+}
+
 // --- CC ---
 
 func (m *Module) handleGetCC(w http.ResponseWriter, _ *http.Request) {
@@ -268,8 +334,12 @@ func (m *Module) handlePutCC(w http.ResponseWriter, r *http.Request) {
 
 // --- Config preview / apply / stats ---
 
-// loadRuleSet 从库里组装当前规则集。
+// loadRuleSet 从库里组装当前规则集,GlobalEnabled 取自 settings.waf_enabled。
 func (m *Module) loadRuleSet() (RuleSet, error) {
+	set, err := m.ws.getSettings()
+	if err != nil {
+		return RuleSet{}, err
+	}
 	ip, err := m.ws.listIP()
 	if err != nil {
 		return RuleSet{}, err
@@ -282,7 +352,7 @@ func (m *Module) loadRuleSet() (RuleSet, error) {
 	if err != nil {
 		return RuleSet{}, err
 	}
-	return RuleSet{IPRules: ip, MatchRules: match, CC: cc}, nil
+	return RuleSet{GlobalEnabled: set.WAFEnabled, IPRules: ip, MatchRules: match, CC: cc}, nil
 }
 
 func (m *Module) handlePreviewConfig(w http.ResponseWriter, _ *http.Request) {
@@ -346,6 +416,14 @@ func (m *Module) handleStats(w http.ResponseWriter, _ *http.Request) {
 }
 
 // --- helpers ---
+
+// toggleBody 是单规则启停端点的请求体/响应体。
+type toggleBody struct {
+	Enabled bool `json:"enabled"`
+}
+
+// confirmed 报告危险操作确认头是否存在。
+func confirmed(r *http.Request) bool { return r.Header.Get("X-Confirm-Danger") != "" }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384)).Decode(v); err != nil {

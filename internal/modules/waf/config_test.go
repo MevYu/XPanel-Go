@@ -7,6 +7,7 @@ import (
 
 func TestGenerateConfigIPList(t *testing.T) {
 	rs := RuleSet{
+		GlobalEnabled: true,
 		IPRules: []IPRule{
 			{Action: "deny", CIDR: "10.0.0.0/8", Enabled: true},
 			{Action: "allow", CIDR: "1.2.3.4", Enabled: true},
@@ -35,6 +36,7 @@ func TestGenerateConfigIPList(t *testing.T) {
 
 func TestGenerateConfigDeterministic(t *testing.T) {
 	rs := RuleSet{
+		GlobalEnabled: true,
 		IPRules: []IPRule{
 			{Action: "deny", CIDR: "9.9.9.9", Enabled: true},
 			{Action: "deny", CIDR: "1.1.1.1", Enabled: true},
@@ -58,6 +60,7 @@ func TestGenerateConfigDeterministic(t *testing.T) {
 
 func TestGenerateConfigMatchRules(t *testing.T) {
 	rs := RuleSet{
+		GlobalEnabled: true,
 		MatchRules: []MatchRule{
 			{Target: "ua", Pattern: "sqlmap", Action: "block", Enabled: true},
 			{Target: "uri", Pattern: `/wp-admin`, Action: "block", Enabled: true},
@@ -86,7 +89,7 @@ func TestGenerateConfigMatchRules(t *testing.T) {
 }
 
 func TestGenerateConfigCC(t *testing.T) {
-	rs := RuleSet{CC: CCConfig{Enabled: true, RatePerSec: 5, Burst: 10, ConnPerIP: 8, ZoneSizeMB: 16}}
+	rs := RuleSet{GlobalEnabled: true, CC: CCConfig{Enabled: true, RatePerSec: 5, Burst: 10, ConnPerIP: 8, ZoneSizeMB: 16}}
 	cfg, err := GenerateConfig(rs)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -110,6 +113,39 @@ func TestGenerateConfigCCDisabledOmitsLimits(t *testing.T) {
 	cfg, _ := GenerateConfig(rs)
 	if strings.Contains(cfg.HTTP, "limit_req_zone") || strings.Contains(cfg.Server, "limit_req ") {
 		t.Errorf("disabled CC must not emit limit directives")
+	}
+}
+
+// TestGenerateConfigGlobalDisabledOmitsAllEnforcement 验证全局总开关关闭时,
+// 即便有启用规则,生成的配置也不含任何拦截指令(整体不拦)。
+func TestGenerateConfigGlobalDisabledOmitsAllEnforcement(t *testing.T) {
+	rs := RuleSet{
+		GlobalEnabled: false,
+		IPRules:       []IPRule{{Action: "deny", CIDR: "1.2.3.4", Enabled: true}},
+		MatchRules:    []MatchRule{{Target: "uri", Pattern: "/wp-admin", Action: "block", Enabled: true}},
+		CC:            CCConfig{Enabled: true, RatePerSec: 5, Burst: 10, ConnPerIP: 8, ZoneSizeMB: 16},
+	}
+	cfg, err := GenerateConfig(rs)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	for _, banned := range []string{"deny 1.2.3.4;", "return 403", "limit_req ", "limit_req_zone", "~*/wp-admin"} {
+		if strings.Contains(cfg.Server, banned) || strings.Contains(cfg.HTTP, banned) {
+			t.Errorf("globally-disabled WAF leaked %q into config:\nHTTP:\n%s\nServer:\n%s", banned, cfg.HTTP, cfg.Server)
+		}
+	}
+}
+
+// TestGenerateConfigGlobalDisabledStillRejectsInjection 验证全局关闭不绕过规则校验:
+// 畸形规则即便在 WAF 关闭时也必须被拒(防关开关时偷渡注入)。
+func TestGenerateConfigGlobalDisabledStillRejectsInjection(t *testing.T) {
+	rs := RuleSet{
+		GlobalEnabled: false,
+		IPRules:       []IPRule{{Action: "deny", CIDR: "1.2.3.4; return 444", Enabled: true}},
+		CC:            DefaultCCConfig(),
+	}
+	if _, err := GenerateConfig(rs); err == nil {
+		t.Error("malicious rule must be rejected even when WAF globally disabled")
 	}
 }
 
