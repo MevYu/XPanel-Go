@@ -200,6 +200,93 @@ func TestQuarantineAndRestoreFlow(t *testing.T) {
 	}
 }
 
+func TestDeleteRequiresConfirm(t *testing.T) {
+	_, h, dir, _ := testMod(t, "admin")
+	seedShell(t, dir, "evil.php")
+	rec := req(t, h, http.MethodPost, "/delete", `{"path":"evil.php"}`, nil)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Errorf("delete w/o confirm: want 428, got %d", rec.Code)
+	}
+}
+
+func TestDeleteRequiresAdmin(t *testing.T) {
+	_, h, dir, _ := testMod(t, "operator")
+	seedShell(t, dir, "evil.php")
+	rec := req(t, h, http.MethodPost, "/delete", `{"path":"evil.php"}`,
+		map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("operator delete: want 403, got %d", rec.Code)
+	}
+}
+
+func TestDeleteRemovesHitFile(t *testing.T) {
+	_, h, dir, audits := testMod(t, "admin")
+	seedShell(t, dir, "evil.php")
+	orig := filepath.Join(dir, "evil.php")
+
+	rec := req(t, h, http.MethodPost, "/delete", `{"path":"evil.php"}`,
+		map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: want 200, got %d (%s)", rec.Code, rec.Body)
+	}
+	if _, err := os.Lstat(orig); !os.IsNotExist(err) {
+		t.Errorf("file must be gone after delete")
+	}
+	var res map[string]string
+	_ = json.Unmarshal(rec.Body.Bytes(), &res)
+	if res["deleted"] != orig {
+		t.Errorf("want deleted=%q, got %q", orig, res["deleted"])
+	}
+	var hasDelete bool
+	for _, a := range *audits {
+		if strings.HasPrefix(a, "malscan.delete:") && strings.HasSuffix(a, orig) {
+			hasDelete = true
+		}
+	}
+	if !hasDelete {
+		t.Errorf("delete must be audited with abs path: %v", *audits)
+	}
+}
+
+// 删除的 path 经 SafeJoin 钳制回 scan_dir 内,绝不会动到 scan_dir 外的真实文件。
+// 钳后路径落在 scan_dir 内,宿主 /etc/passwd 安然无恙。
+func TestDeleteCannotEscapeRoot(t *testing.T) {
+	_, h, dir, _ := testMod(t, "admin")
+	writeSample(t, dir, "etc/passwd", "decoy")
+	clamped := filepath.Join(dir, "etc/passwd")
+	rec := req(t, h, http.MethodPost, "/delete", `{"path":"../../etc/passwd"}`,
+		map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clamped delete: want 200, got %d (%s)", rec.Code, rec.Body)
+	}
+	var res map[string]string
+	_ = json.Unmarshal(rec.Body.Bytes(), &res)
+	if res["deleted"] != clamped {
+		t.Errorf("deleted path must be clamped within scan_dir, got %q", res["deleted"])
+	}
+}
+
+// 软链逃逸:scan_dir 内软链指向外部文件,SafeJoin 必须拒绝删除,外部文件不受影响。
+func TestDeleteRejectsSymlinkEscape(t *testing.T) {
+	_, h, dir, _ := testMod(t, "admin")
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("write outside: %v", err)
+	}
+	link := filepath.Join(dir, "evil_link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	rec := req(t, h, http.MethodPost, "/delete", `{"path":"evil_link"}`,
+		map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("symlink-escape delete: want 400, got %d (%s)", rec.Code, rec.Body)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("outside file must survive rejected delete: %v", err)
+	}
+}
+
 func TestWhitelistExcludesFromScan(t *testing.T) {
 	_, h, dir, _ := testMod(t, "operator")
 	seedShell(t, dir, "evil.php")
