@@ -37,6 +37,7 @@ type Module struct {
 	deps      Deps
 	newNginx  func(confDir string) Nginx // 工厂:按当前设置的 confDir 构造控制器,便于测试替换
 	available func() error               // HealthCheck 用:nginx 是否在 PATH
+	prober    Prober                     // 后端存活探测,便于测试注入 mock(零真实网络)
 }
 
 // New 建表并返回模块。建表失败直接 panic(模块无法工作)。
@@ -50,6 +51,7 @@ func New(st *store.Store, deps Deps) *Module {
 		deps:      deps,
 		newNginx:  func(confDir string) Nginx { return newRealNginx(confDir) },
 		available: func() error { return newRealNginx("").Available() },
+		prober:    tcpProber{},
 	}
 }
 
@@ -71,6 +73,7 @@ func (m *Module) Routes(r module.Router) {
 	r.Get("/groups", m.handleList)                               // 只读
 	r.Post("/groups", m.handleCreate)                            // 写:operator+
 	r.Get("/groups/{id}", m.handleGet)                           // 只读:含生成的配置
+	r.Get("/groups/{id}/health", m.handleHealth)                 // 只读:逐节点 up/down + 响应时间
 	r.Post("/groups/{id}/{verb:enable|disable}", m.handleToggle) // 写;disable 危险
 	r.Delete("/groups/{id}", m.handleDelete)                     // 危险写:admin + 二次确认
 	r.Get("/settings", m.handleGetSettings)                      // 只读
@@ -101,6 +104,26 @@ func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, g)
+}
+
+// handleHealth 探测组内每个后端的存活并返回逐节点 up/down + 响应时间。
+// 只读:节点地址全部来自已存配置,绝不接受请求体里的任意地址(防 SSRF)。
+func (m *Module) handleHealth(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	g, err := m.ls.get(id)
+	if err != nil {
+		http.Error(w, "group not found", http.StatusNotFound)
+		return
+	}
+	health := GroupHealth{
+		GroupID:  g.ID,
+		Name:     g.Name,
+		Backends: probeBackends(r.Context(), m.prober, g.Backends),
+	}
+	writeJSON(w, http.StatusOK, health)
 }
 
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
