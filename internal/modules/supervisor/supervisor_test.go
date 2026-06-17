@@ -288,6 +288,122 @@ func TestListEmptyReturnsArray(t *testing.T) {
 	}
 }
 
+func TestUpdateHappyPath(t *testing.T) {
+	ctl := &mockController{}
+	m, audited := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	*audited = 0
+	ctl.reloads = 0
+	body := `{"name":"web","command":"/bin/run2","directory":"/opt/web2","auto_restart":false,"numprocs":3}`
+	rec := do(m, "PUT", "/programs/"+id, body, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update should 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// 配置被重写、reload 触发、新值生效。
+	if len(ctl.writes) == 0 || ctl.writes[len(ctl.writes)-1] != "web" {
+		t.Fatalf("expected config rewrite for web, got %v", ctl.writes)
+	}
+	if ctl.reloads != 1 {
+		t.Fatalf("expected 1 reload, got %d", ctl.reloads)
+	}
+	if !strings.Contains(ctl.lastCfg, "/bin/run2") || !strings.Contains(ctl.lastCfg, "numprocs=3") {
+		t.Fatalf("rendered config not updated: %s", ctl.lastCfg)
+	}
+	if !strings.Contains(rec.Body.String(), "/opt/web2") {
+		t.Fatalf("response missing updated directory: %s", rec.Body.String())
+	}
+	if *audited != 1 {
+		t.Fatalf("expected 1 audit, got %d", *audited)
+	}
+}
+
+func TestUpdateRenameRemovesOldConfig(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m) // name "web"
+	body := `{"name":"app","command":"/bin/run","directory":"/opt/web","auto_restart":true,"numprocs":1}`
+	rec := do(m, "PUT", "/programs/"+id, body, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename update should 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(ctl.removes) != 1 || ctl.removes[0] != "web" {
+		t.Fatalf("rename must remove old config 'web', got %v", ctl.removes)
+	}
+	if ctl.writes[len(ctl.writes)-1] != "app" {
+		t.Fatalf("rename must write new config 'app', got %v", ctl.writes)
+	}
+}
+
+func TestUpdateRejectsInjectionCommand(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	writesBefore := len(ctl.writes)
+	body := "{\"name\":\"web\",\"command\":\"run\\nmalicious=1\",\"directory\":\"/opt\",\"numprocs\":1}"
+	rec := do(m, "PUT", "/programs/"+id, body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("newline command should 400, got %d", rec.Code)
+	}
+	if len(ctl.writes) != writesBefore {
+		t.Fatalf("must not rewrite config on invalid input, got %v", ctl.writes)
+	}
+}
+
+func TestUpdateRejectsInjectionName(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	body := `{"name":"web;rm -rf /","command":"/bin/run","directory":"/opt","numprocs":1}`
+	rec := do(m, "PUT", "/programs/"+id, body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("injection name should 400, got %d", rec.Code)
+	}
+}
+
+func TestUpdateRejectsRelativeDir(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	body := `{"name":"web","command":"/bin/run","directory":"relative","numprocs":1}`
+	rec := do(m, "PUT", "/programs/"+id, body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("relative dir should 400, got %d", rec.Code)
+	}
+}
+
+func TestUpdateNotFound(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	body := `{"name":"web","command":"/bin/run","directory":"/opt","numprocs":1}`
+	rec := do(m, "PUT", "/programs/999", body, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("update missing program should 404, got %d", rec.Code)
+	}
+}
+
+// TestUpdateRequiresAdmin 锁定提权防线:operator 编辑(可改启动命令)必须 403,不得落配置。
+func TestUpdateRequiresAdmin(t *testing.T) {
+	ctl := &mockController{}
+	m, audited := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	*audited = 0
+	writesBefore := len(ctl.writes)
+
+	op := cloneRole(m, "operator")
+	body := `{"name":"pwn","command":"/bin/sh -c id","directory":"/opt","numprocs":1}`
+	rec := do(op, "PUT", "/programs/"+id, body, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator update (arbitrary command) must 403, got %d", rec.Code)
+	}
+	if *audited != 0 || len(ctl.writes) != writesBefore {
+		t.Fatal("forbidden update must not audit or write config")
+	}
+	// 元数据未被改动。
+	if p, _ := m.ss.get(1); p.Name != "web" || p.Command != "/bin/run" {
+		t.Fatalf("forbidden update must not mutate record, got %+v", p)
+	}
+}
+
 // cloneRole 在同一 DB/Controller 上复制一个不同角色的 Module 视图,用于跨角色访问已有数据。
 func cloneRole(m *Module, role string) *Module {
 	return &Module{

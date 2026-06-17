@@ -56,6 +56,7 @@ func (m *Module) HealthCheck() error { return m.ctl.Available() }
 func (m *Module) Routes(r module.Router) {
 	r.Get("/programs", m.handleList)                                   // 只读
 	r.Post("/programs", m.handleCreate)                                // 写:admin(可指定任意启动命令 → 提权风险)
+	r.Put("/programs/{id}", m.handleUpdate)                            // 写:admin(同 create,可改启动命令 → 提权风险)
 	r.Delete("/programs/{id}", m.handleDelete)                         // 危险写:admin + 确认
 	r.Get("/programs/{id}/status", m.handleStatus)                     // 只读
 	r.Get("/programs/{id}/logs", m.handleLogs)                         // 只读
@@ -136,6 +137,74 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	m.deps.Audit(&uid, "supervisor.create", req.Name, m.clientIP(r))
 	p, _ := m.ss.get(id)
 	writeJSON(w, http.StatusCreated, p)
+}
+
+// handleUpdate 编辑守护程序:与 create 同样可指定任意启动命令(以 supervisor 属主执行),
+// 故同样须 admin。重写配置并 reload;改名时先删旧配置文件避免留孤儿。
+func (m *Module) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var req programRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if req.Numprocs == 0 {
+		req.Numprocs = 1
+	}
+	if !m.validateProgram(w, req) {
+		return
+	}
+	old, err := m.ss.get(id)
+	if err != nil {
+		http.Error(w, "program not found", http.StatusNotFound)
+		return
+	}
+	set, err := m.ss.loadSettings()
+	if err != nil {
+		log.Printf("supervisor: load settings failed: %v", err)
+		http.Error(w, "update failed", http.StatusInternalServerError)
+		return
+	}
+	if err := m.ss.update(Program{
+		ID: id, Name: req.Name, Command: req.Command, Directory: req.Directory,
+		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs,
+	}); err != nil {
+		// 改名撞上已存在的程序名(UNIQUE 约束)。
+		http.Error(w, "update failed (duplicate name?)", http.StatusConflict)
+		return
+	}
+	cfg := RenderConfig(ProgramSpec{
+		Name: req.Name, Command: req.Command, Directory: req.Directory,
+		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs, LogDir: set.LogDir,
+	})
+	if err := m.ctl.WriteConfig(set.ConfDir, req.Name, cfg); err != nil {
+		_ = m.ss.update(old) // 回滚元数据:配置没落盘,不留与配置不符的记录。
+		log.Printf("supervisor: write config failed: %v", err)
+		http.Error(w, "write config failed", http.StatusInternalServerError)
+		return
+	}
+	// 改名后旧配置文件成孤儿:先停旧程序再删旧配置。失败不阻断(可能本就没起)。
+	if req.Name != old.Name {
+		_, _ = m.ctl.Action("stop", old.Name)
+		if err := m.ctl.RemoveConfig(set.ConfDir, old.Name); err != nil {
+			log.Printf("supervisor: remove old config %q failed: %v", old.Name, err)
+		}
+	}
+	if err := m.ctl.Reload(); err != nil {
+		log.Printf("supervisor: reload after update failed: %v", err)
+		http.Error(w, "supervisor reload failed", http.StatusInternalServerError)
+		return
+	}
+	m.deps.Audit(&uid, "supervisor.update", req.Name, m.clientIP(r))
+	p, _ := m.ss.get(id)
+	writeJSON(w, http.StatusOK, p)
 }
 
 // handleDelete 删除守护程序:配置与元数据一并移除,属危险操作,需 admin + 二次确认。
