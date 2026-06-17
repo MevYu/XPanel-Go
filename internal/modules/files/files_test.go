@@ -93,6 +93,32 @@ func TestWriteAndReadRoundtrip(t *testing.T) {
 	}
 }
 
+func TestReadRejectsOversize(t *testing.T) {
+	m, root, _ := newModule(t, "operator")
+	r := panelRouter(m)
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), bytes.Repeat([]byte("a"), maxReadBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/read?path=big.txt", nil))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize read want 413, got %d", rec.Code)
+	}
+}
+
+func TestReadRejectsBinary(t *testing.T) {
+	m, root, _ := newModule(t, "operator")
+	r := panelRouter(m)
+	if err := os.WriteFile(filepath.Join(root, "bin"), []byte("ok\x00ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/read?path=bin", nil))
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("binary read want 415, got %d", rec.Code)
+	}
+}
+
 func TestPanelPathTraversalConfined(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "root")

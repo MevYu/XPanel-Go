@@ -9,6 +9,7 @@ package files
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -170,6 +171,9 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// maxReadBytes 是在线编辑器读取的大小上限;超限拒绝,避免把巨型文件拉进前端。
+const maxReadBytes = 5 << 20 // 5 MiB
+
 func (m *Module) handleRead(w http.ResponseWriter, r *http.Request) {
 	abs, err := m.resolve(r.URL.Query().Get("path"))
 	if err != nil {
@@ -185,14 +189,22 @@ func (m *Module) handleRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "is a directory", http.StatusBadRequest)
 		return
 	}
-	f, err := os.Open(abs)
+	if fi.Size() > maxReadBytes {
+		http.Error(w, "file too large to edit (max 5 MiB)", http.StatusRequestEntityTooLarge)
+		return
+	}
+	data, err := os.ReadFile(abs)
 	if err != nil {
 		fsError(w, err)
 		return
 	}
-	defer f.Close()
-	w.Header().Set("Content-Type", "application/octet-stream")
-	_, _ = io.Copy(w, f)
+	// 含 NUL 字节判定为二进制,编辑器只处理文本。
+	if bytes.IndexByte(data, 0) >= 0 {
+		http.Error(w, "binary file not editable", http.StatusUnsupportedMediaType)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(data)
 }
 
 func (m *Module) handleDownload(w http.ResponseWriter, r *http.Request) {
