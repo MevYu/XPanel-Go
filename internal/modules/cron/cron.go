@@ -26,10 +26,14 @@ import (
 )
 
 // Deps 注入宿主能力,避免反向依赖 server。与 service 模块一致。
+// BackupSite/BackupDB 是可选的进程内备份钩子:nil 表示未接通(对应任务执行时明确报错)。
+// 用钩子而非直接 import sites/database,保持模块解耦。
 type Deps struct {
-	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
-	Audit     func(userID *int64, action, detail, ip string)  // 写审计
-	ClientIP  func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
+	Principal  func(*http.Request) (userID int64, role string) // 取当前登录主体
+	Audit      func(userID *int64, action, detail, ip string)  // 写审计
+	ClientIP   func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
+	BackupSite func(target string) error                       // backup_site:target 为站点名
+	BackupDB   func(target string) error                       // backup_db:target 为 "<engine>:<database>"
 }
 
 // logCutRoot 是日志切割任务的路径限定根:log_cut 的 path 经 SafeJoin 限定其下。
@@ -39,6 +43,7 @@ const logCutRoot = "/var/log"
 type Module struct {
 	cs    *cronStore
 	deps  Deps
+	run   *execRunner // 真实执行器;备份钩子可经 SetBackupHooks 后补
 	sched *scheduler
 }
 
@@ -52,8 +57,21 @@ func New(st *store.Store, deps Deps) *Module {
 	r := &execRunner{
 		logCutRoot: logCutRoot,
 		scriptDir:  filepath.Join(os.TempDir(), "xpanel-cron-scripts"),
+		backupSite: deps.BackupSite,
+		backupDB:   deps.BackupDB,
 	}
-	return &Module{cs: cs, deps: deps, sched: newScheduler(cs, r)}
+	return &Module{cs: cs, deps: deps, run: r, sched: newScheduler(cs, r)}
+}
+
+// SetBackupHooks 注入备份钩子。宿主在 sites/database 模块构造后调用一次
+// (cron 比它们先构造,故 New 时钩子可能为 nil)。nil 参数保持未接通。
+func (m *Module) SetBackupHooks(site, db func(target string) error) {
+	if site != nil {
+		m.run.backupSite = site
+	}
+	if db != nil {
+		m.run.backupDB = db
+	}
 }
 
 func (*Module) Meta() module.ModuleMeta {

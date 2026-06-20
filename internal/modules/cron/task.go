@@ -88,10 +88,17 @@ func validatePayload(typ string, p payload, root string) (payload, error) {
 		}
 		return payload{URL: u, Timeout: to}, nil
 
-	case taskBackupSite, taskBackupDB:
+	case taskBackupSite:
 		tgt := strings.TrimSpace(p.Target)
 		if !validBackupTarget(tgt) {
-			return payload{}, fmt.Errorf("backup: target name empty or has unsafe chars")
+			return payload{}, fmt.Errorf("backup_site: target name empty or has unsafe chars")
+		}
+		return payload{Target: tgt}, nil
+
+	case taskBackupDB:
+		tgt := strings.TrimSpace(p.Target)
+		if !validBackupDBTarget(tgt) {
+			return payload{}, fmt.Errorf("backup_db: target must be \"<engine>:<database>\" with safe chars")
 		}
 		return payload{Target: tgt}, nil
 	}
@@ -151,4 +158,17 @@ func validBackupTarget(s string) bool {
 		}
 	}
 	return true
+}
+
+// validBackupDBTarget 校验 backup_db 的 "<engine>:<database>" 形式:
+// 仅一个冒号,engine 为 mysql/postgres,database 为合法 backup 目标名。
+func validBackupDBTarget(s string) bool {
+	engine, db, ok := strings.Cut(s, ":")
+	if !ok {
+		return false
+	}
+	if engine != "mysql" && engine != "postgres" {
+		return false
+	}
+	return validBackupTarget(db)
 }

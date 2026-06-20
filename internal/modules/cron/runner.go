@@ -33,12 +33,20 @@ type runner interface {
 
 // execRunner 是真实执行器:按任务类型构造命令(始终参数数组,绝不拼 shell 串),
 // 捕获输出与退出码。logCutRoot 限定 log_cut 路径;scriptDir 存放 shell 脚本。
+// backupSite/backupDB 是进程内备份钩子(由宿主经 SetBackupHooks 注入);nil 表示未接通。
 type execRunner struct {
 	logCutRoot string
 	scriptDir  string
+	backupSite func(target string) error // backup_site 钩子;target 为站点名
+	backupDB   func(target string) error // backup_db 钩子;target 为 "<engine>:<database>"
 }
 
 func (e *execRunner) run(ctx context.Context, j Job) runResult {
+	// 备份任务不是外部命令,走进程内钩子:捕获错误成 runResult,与命令路径的成功/失败语义一致。
+	if j.Type == taskBackupSite || j.Type == taskBackupDB {
+		return e.runBackup(j)
+	}
+
 	start := time.Now()
 	res := runResult{StartedAt: start.Unix(), ExitCode: -1}
 
@@ -105,11 +113,39 @@ func (e *execRunner) build(ctx context.Context, j Job) (*exec.Cmd, func(), error
 		// -f 失败返回非 0,-sS 静默但显示错误,--max-time 限时。
 		return exec.CommandContext(ctx, "curl", "-fsS", "--max-time", to, j.Payload.URL), nil, nil
 
-	case taskBackupSite, taskBackupDB:
-		// 预留:备份模块联动尚未接通。明确报错而非静默成功。
-		return nil, nil, fmt.Errorf("%s backup not yet wired to backup module (target=%s)", j.Type, j.Payload.Target)
 	}
 	return nil, nil, fmt.Errorf("unknown task type %q", j.Type)
+}
+
+// runBackup 执行进程内备份钩子,把成功/失败映射到 runResult(退出码 0/1)。
+// 钩子未注入(nil)时报明确错误而非静默成功。
+func (e *execRunner) runBackup(j Job) runResult {
+	start := time.Now()
+	res := runResult{StartedAt: start.Unix(), ExitCode: -1}
+
+	var hook func(string) error
+	switch j.Type {
+	case taskBackupSite:
+		hook = e.backupSite
+	case taskBackupDB:
+		hook = e.backupDB
+	}
+	if hook == nil {
+		res.Err = fmt.Sprintf("%s backup hook not wired (target=%s)", j.Type, j.Payload.Target)
+		res.DurationMs = time.Since(start).Milliseconds()
+		return res
+	}
+
+	err := hook(j.Payload.Target)
+	res.DurationMs = time.Since(start).Milliseconds()
+	if err != nil {
+		res.ExitCode = 1
+		res.Output = err.Error()
+		return res
+	}
+	res.ExitCode = 0
+	res.Output = "backup ok: " + j.Payload.Target
+	return res
 }
 
 // writeScript 把脚本内容写到 scriptDir 下的临时文件,返回路径与清理函数。

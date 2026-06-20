@@ -63,6 +63,20 @@ func ValidDir(dir string) bool {
 // ValidNumprocs 进程数须在 1..256。
 func ValidNumprocs(n int) bool { return n >= 1 && n <= 256 }
 
+// 标准 unix 用户名:小写字母/下划线开头,后跟字母数字/下划线/连字符,总长 ≤32。
+var userNameRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// ValidUser 校验运行用户名。空表示不指定(由 supervisor 以自身属主运行),允许。
+func ValidUser(s string) bool {
+	if s == "" {
+		return true
+	}
+	return userNameRe.MatchString(s)
+}
+
+// ValidPriority 启动优先级须在 0..9999。
+func ValidPriority(n int) bool { return n >= 0 && n <= 9999 }
+
 func hasCtrl(s string) bool {
 	for _, r := range s {
 		if r == '\n' || r == '\r' || r < 0x20 {
@@ -80,6 +94,8 @@ type ProgramSpec struct {
 	Directory   string
 	AutoRestart bool
 	Numprocs    int
+	User        string
+	Priority    int
 	LogDir      string
 }
 
@@ -97,6 +113,10 @@ func RenderConfig(s ProgramSpec) string {
 	fmt.Fprintf(&b, "directory=%s\n", strings.TrimSpace(s.Directory))
 	fmt.Fprintf(&b, "autostart=true\n")
 	fmt.Fprintf(&b, "autorestart=%s\n", autorestart)
+	fmt.Fprintf(&b, "priority=%d\n", s.Priority)
+	if strings.TrimSpace(s.User) != "" {
+		fmt.Fprintf(&b, "user=%s\n", strings.TrimSpace(s.User))
+	}
 	fmt.Fprintf(&b, "numprocs=%d\n", s.Numprocs)
 	if s.Numprocs > 1 {
 		// numprocs>1 时 supervisor 要求 process_name 含 %(process_num)s。
@@ -112,6 +132,8 @@ func RenderConfig(s ProgramSpec) string {
 type Controller interface {
 	// WriteConfig 把 name 的配置写到 confDir/name.conf。
 	WriteConfig(confDir, name, content string) error
+	// ReadConfig 读 confDir/name.conf 原始内容;文件不存在返回空串、无错误(程序可能尚无配置)。
+	ReadConfig(confDir, name string) (string, error)
 	// RemoveConfig 删除 confDir/name.conf(不存在视为成功)。
 	RemoveConfig(confDir, name string) error
 	// Reload 执行 supervisorctl reread + update,使配置变更生效。
@@ -141,6 +163,21 @@ func (execController) WriteConfig(confDir, name, content string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func (execController) ReadConfig(confDir, name string) (string, error) {
+	path, err := safeConfPath(confDir, name)
+	if err != nil {
+		return "", err
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(content), nil
 }
 
 func (execController) RemoveConfig(confDir, name string) error {

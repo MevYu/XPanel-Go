@@ -25,7 +25,7 @@ func TestProgramCRUD(t *testing.T) {
 	uid := int64(7)
 	id, err := ss.create(Program{
 		Name: "app", Command: "/bin/run", Directory: "/opt",
-		AutoRestart: true, Numprocs: 2, CreatedBy: &uid,
+		AutoRestart: true, Numprocs: 2, User: "www", Priority: 500, CreatedBy: &uid,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -36,6 +36,9 @@ func TestProgramCRUD(t *testing.T) {
 	}
 	if p.Name != "app" || !p.AutoRestart || p.Numprocs != 2 || p.CreatedBy == nil || *p.CreatedBy != 7 {
 		t.Fatalf("round-trip mismatch: %+v", p)
+	}
+	if p.User != "www" || p.Priority != 500 {
+		t.Fatalf("user/priority round-trip mismatch: %+v", p)
 	}
 	list, err := ss.list()
 	if err != nil || len(list) != 1 {

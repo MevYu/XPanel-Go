@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -21,12 +22,14 @@ type account struct {
 type ftpBackend interface {
 	// list 返回所有虚拟用户(不含口令)。
 	list(ctx context.Context) ([]account, error)
-	// create 新建虚拟用户。readonly 为真则只授读权限。
-	create(ctx context.Context, user, password, home string, readonly bool) error
+	// create 新建虚拟用户。readonly 为真则只授读权限。quotaMB 为存储配额(MB),0=不限。
+	create(ctx context.Context, user, password, home string, readonly bool, quotaMB int) error
 	// delete 删除虚拟用户。
 	delete(ctx context.Context, user string) error
 	// setPassword 改虚拟用户口令。
 	setPassword(ctx context.Context, user, password string) error
+	// setQuota 设置虚拟用户存储配额(MB),0=不限。
+	setQuota(ctx context.Context, user string, quotaMB int) error
 	// setEnabled 启停虚拟用户(pure-ftpd 用账户过期/激活实现)。
 	setEnabled(ctx context.Context, user string, enabled bool) error
 	// available 报告后端可用(命令存在),供模块 HealthCheck。
@@ -80,7 +83,7 @@ func (b *pureFTPd) list(ctx context.Context) ([]account, error) {
 	return accts, nil
 }
 
-func (b *pureFTPd) create(ctx context.Context, user, password, home string, _ bool) error {
+func (b *pureFTPd) create(ctx context.Context, user, password, home string, _ bool, quotaMB int) error {
 	if err := b.available(); err != nil {
 		return err
 	}
@@ -88,11 +91,25 @@ func (b *pureFTPd) create(ctx context.Context, user, password, home string, _ bo
 	// 注:pure-pw 的 -r 是"限定允许的来源 IP",并非只读权限;旧代码 `-r ""` 既不实现
 	// 只读又传了无意义空参。pure-pw useradd 无逐用户只读开关(只读由 pure-ftpd 守护层
 	// 配置),故此处不据 readonly 传任何参数;只读意图仅落 XPanel 的账户元数据。
-	args := []string{"useradd", user, "-u", b.uid, "-g", b.gid, "-d", home, "-m"}
+	args := []string{"useradd", user, "-u", b.uid, "-g", b.gid, "-d", home}
+	// -N <MB> 设存储配额;0=不限,故仅 >0 时传(配额为校验过的 int,作为独立 argv 元素)。
+	if quotaMB > 0 {
+		args = append(args, "-N", strconv.Itoa(quotaMB))
+	}
+	args = append(args, "-m")
 	if _, err := b.run(ctx, passwordStdin(password), args...); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (b *pureFTPd) setQuota(ctx context.Context, user string, quotaMB int) error {
+	if err := b.available(); err != nil {
+		return err
+	}
+	// -N <MB> 设存储配额(0=不限);-m 立即重建 .pdb。配额为校验过的 int,作为独立 argv 元素。
+	_, err := b.run(ctx, "", "usermod", user, "-N", strconv.Itoa(quotaMB), "-m")
+	return err
 }
 
 func (b *pureFTPd) delete(ctx context.Context, user string) error {

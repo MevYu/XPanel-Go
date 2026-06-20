@@ -60,6 +60,8 @@ func (m *Module) Routes(r module.Router) {
 	r.Delete("/programs/{id}", m.handleDelete)                         // 危险写:admin + 确认
 	r.Get("/programs/{id}/status", m.handleStatus)                     // 只读
 	r.Get("/programs/{id}/logs", m.handleLogs)                         // 只读
+	r.Get("/programs/{id}/config", m.handleGetConfig)                  // 只读:查看原始配置
+	r.Put("/programs/{id}/config", m.handlePutConfig)                  // 危险写:admin + 确认(可改启动命令 → 提权风险)
 	r.Post("/programs/{id}/{verb:start|stop|restart}", m.handleAction) // 写:operator+(stop 危险)
 	r.Get("/settings", m.handleGetSettings)                            // 只读
 	r.Put("/settings", m.handlePutSettings)                            // 写:admin
@@ -71,6 +73,8 @@ type programRequest struct {
 	Directory   string `json:"directory"`
 	AutoRestart bool   `json:"auto_restart"`
 	Numprocs    int    `json:"numprocs"`
+	User        string `json:"user"`
+	Priority    int    `json:"priority"`
 }
 
 func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
@@ -101,6 +105,9 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Numprocs == 0 {
 		req.Numprocs = 1
 	}
+	if req.Priority == 0 {
+		req.Priority = 999
+	}
 	if !m.validateProgram(w, req) {
 		return
 	}
@@ -112,7 +119,8 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := m.ss.create(Program{
 		Name: req.Name, Command: req.Command, Directory: req.Directory,
-		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs, CreatedBy: &uid,
+		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs,
+		User: req.User, Priority: req.Priority, CreatedBy: &uid,
 	})
 	if err != nil {
 		// 名称唯一约束冲突等。
@@ -121,7 +129,8 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := RenderConfig(ProgramSpec{
 		Name: req.Name, Command: req.Command, Directory: req.Directory,
-		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs, LogDir: set.LogDir,
+		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs,
+		User: req.User, Priority: req.Priority, LogDir: set.LogDir,
 	})
 	if err := m.ctl.WriteConfig(set.ConfDir, req.Name, cfg); err != nil {
 		_ = m.ss.delete(id) // 回滚元数据:配置没落盘,不留孤儿记录。
@@ -158,6 +167,9 @@ func (m *Module) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Numprocs == 0 {
 		req.Numprocs = 1
 	}
+	if req.Priority == 0 {
+		req.Priority = 999
+	}
 	if !m.validateProgram(w, req) {
 		return
 	}
@@ -175,6 +187,7 @@ func (m *Module) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := m.ss.update(Program{
 		ID: id, Name: req.Name, Command: req.Command, Directory: req.Directory,
 		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs,
+		User: req.User, Priority: req.Priority,
 	}); err != nil {
 		// 改名撞上已存在的程序名(UNIQUE 约束)。
 		http.Error(w, "update failed (duplicate name?)", http.StatusConflict)
@@ -182,7 +195,8 @@ func (m *Module) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := RenderConfig(ProgramSpec{
 		Name: req.Name, Command: req.Command, Directory: req.Directory,
-		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs, LogDir: set.LogDir,
+		AutoRestart: req.AutoRestart, Numprocs: req.Numprocs,
+		User: req.User, Priority: req.Priority, LogDir: set.LogDir,
 	})
 	if err := m.ctl.WriteConfig(set.ConfDir, req.Name, cfg); err != nil {
 		_ = m.ss.update(old) // 回滚元数据:配置没落盘,不留与配置不符的记录。
@@ -298,6 +312,93 @@ func (m *Module) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writePlain(w, out)
 }
 
+// handleGetConfig 返回守护程序的原始配置文件内容。只读,与 status/logs 同级:任意已登录用户可访问。
+func (m *Module) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	p, err := m.ss.get(id)
+	if err != nil {
+		http.Error(w, "program not found", http.StatusNotFound)
+		return
+	}
+	set, err := m.ss.loadSettings()
+	if err != nil {
+		log.Printf("supervisor: load settings failed: %v", err)
+		http.Error(w, "config unavailable", http.StatusInternalServerError)
+		return
+	}
+	content, err := m.ctl.ReadConfig(set.ConfDir, p.Name)
+	if err != nil {
+		log.Printf("supervisor: read config failed: %v", err)
+		http.Error(w, "config unavailable", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+
+// configRequest 是 PUT config 的请求体。
+type configRequest struct {
+	Content string `json:"content"`
+}
+
+// maxConfigBytes 限制原始配置体积,挡住超大写入。
+const maxConfigBytes = 64 * 1024
+
+// handlePutConfig 直接覆盖守护程序的原始配置文件:可写入任意启动命令(以 supervisor 属主执行),
+// 属危险操作,须 admin + 二次确认。写盘后 reload 使其生效。
+func (m *Module) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	if !confirmed(r) {
+		http.Error(w, "dangerous operation requires X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var req configRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBytes+1024)).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if req.Content == "" {
+		http.Error(w, "content must not be empty", http.StatusBadRequest)
+		return
+	}
+	if len(req.Content) > maxConfigBytes {
+		http.Error(w, "content too large (max 64KB)", http.StatusBadRequest)
+		return
+	}
+	p, err := m.ss.get(id)
+	if err != nil {
+		http.Error(w, "program not found", http.StatusNotFound)
+		return
+	}
+	set, err := m.ss.loadSettings()
+	if err != nil {
+		log.Printf("supervisor: load settings failed: %v", err)
+		http.Error(w, "save config failed", http.StatusInternalServerError)
+		return
+	}
+	if err := m.ctl.WriteConfig(set.ConfDir, p.Name, req.Content); err != nil {
+		log.Printf("supervisor: write config failed: %v", err)
+		http.Error(w, "save config failed", http.StatusInternalServerError)
+		return
+	}
+	if err := m.ctl.Reload(); err != nil {
+		log.Printf("supervisor: reload after config edit failed: %v", err)
+		http.Error(w, "supervisor reload failed", http.StatusInternalServerError)
+		return
+	}
+	m.deps.Audit(&uid, "supervisor.config", p.Name, m.clientIP(r))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
 	verb := chi.URLParamFromCtx(r.Context(), "verb")
 	// stop 会终止运行中的守护进程,属危险操作:需二次确认。
@@ -402,6 +503,14 @@ func (m *Module) validateProgram(w http.ResponseWriter, req programRequest) bool
 	}
 	if !ValidNumprocs(req.Numprocs) {
 		http.Error(w, "invalid numprocs (1..256)", http.StatusBadRequest)
+		return false
+	}
+	if !ValidUser(req.User) {
+		http.Error(w, "invalid user", http.StatusBadRequest)
+		return false
+	}
+	if !ValidPriority(req.Priority) {
+		http.Error(w, "invalid priority", http.StatusBadRequest)
 		return false
 	}
 	return true

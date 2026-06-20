@@ -24,7 +24,15 @@ var (
 	errInvalidPassword = errors.New("password must be 1..256 chars and contain no control characters")
 	// errInvalidID 是 uid/gid 校验失败的统一错误。
 	errInvalidID = errors.New("virtual_uid/virtual_gid must be a non-privileged numeric id (>=1000) or a service account name")
+	// errInvalidQuota 是配额校验失败的统一错误。
+	errInvalidQuota = errors.New("quota_mb must be an integer in 0..1048576 (MB); 0 = unlimited")
 )
+
+// maxQuotaMB 是允许的最大存储配额(MB),约 1 TB。
+const maxQuotaMB = 1048576
+
+// validQuota 报告配额(MB)是否在合法范围 0..maxQuotaMB(0=不限)。
+func validQuota(mb int) bool { return mb >= 0 && mb <= maxQuotaMB }
 
 // minNonPrivilegedID 是允许映射的最小数字 uid/gid。低于此值(尤其 0=root)拒绝,
 // 避免把 FTP 虚拟用户映射到 root 或系统保留账户而越权。

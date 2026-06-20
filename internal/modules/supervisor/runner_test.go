@@ -55,10 +55,39 @@ func TestValidNumprocs(t *testing.T) {
 	}
 }
 
+func TestValidUser(t *testing.T) {
+	good := []string{"", "www", "www-data", "_svc", "user_1", strings.Repeat("a", 32)}
+	for _, u := range good {
+		if !ValidUser(u) {
+			t.Errorf("expected %q valid", u)
+		}
+	}
+	bad := []string{"Bad User!", "WWW", "1user", "a/b", "a b", strings.Repeat("a", 33), "user;rm"}
+	for _, u := range bad {
+		if ValidUser(u) {
+			t.Errorf("expected %q invalid", u)
+		}
+	}
+}
+
+func TestValidPriority(t *testing.T) {
+	for _, n := range []int{0, 1, 999, 9999} {
+		if !ValidPriority(n) {
+			t.Errorf("expected %d valid", n)
+		}
+	}
+	for _, n := range []int{-1, 10000, 100000} {
+		if ValidPriority(n) {
+			t.Errorf("expected %d invalid", n)
+		}
+	}
+}
+
 func TestRenderConfigSingleProc(t *testing.T) {
 	cfg := RenderConfig(ProgramSpec{
 		Name: "web", Command: "/bin/run", Directory: "/opt/web",
 		AutoRestart: true, Numprocs: 1, LogDir: "/var/log/supervisor",
+		User: "www", Priority: 500,
 	})
 	want := []string{
 		"[program:web]",
@@ -67,6 +96,8 @@ func TestRenderConfigSingleProc(t *testing.T) {
 		"autostart=true",
 		"autorestart=true",
 		"numprocs=1",
+		"priority=500",
+		"user=www",
 		"stdout_logfile=/var/log/supervisor/web.out.log",
 		"stderr_logfile=/var/log/supervisor/web.err.log",
 	}
@@ -77,6 +108,20 @@ func TestRenderConfigSingleProc(t *testing.T) {
 	}
 	if strings.Contains(cfg, "process_name=") {
 		t.Errorf("single-proc config must not set process_name\n%s", cfg)
+	}
+}
+
+func TestRenderConfigOmitsUserWhenEmpty(t *testing.T) {
+	cfg := RenderConfig(ProgramSpec{
+		Name: "web", Command: "/bin/run", Directory: "/opt/web",
+		AutoRestart: true, Numprocs: 1, LogDir: "/var/log/supervisor",
+		User: "", Priority: 999,
+	})
+	if strings.Contains(cfg, "user=") {
+		t.Errorf("empty user must not emit user= line\n%s", cfg)
+	}
+	if !strings.Contains(cfg, "priority=999") {
+		t.Errorf("missing priority=999\n%s", cfg)
 	}
 }
 

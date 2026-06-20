@@ -9,6 +9,7 @@ import (
 	"github.com/MevYu/XPanel-Go/internal/auth"
 	"github.com/MevYu/XPanel-Go/internal/config"
 	"github.com/MevYu/XPanel-Go/internal/module"
+	"github.com/MevYu/XPanel-Go/internal/store"
 	webui "github.com/MevYu/XPanel-Go/web"
 )
 
@@ -62,7 +63,7 @@ type LoginRecorder func(userID int64)
 // entryPath 为隐藏面板入口路径;SPA 只在此路径下提供,其余非 API/静态请求返回 404。
 // probe 守卫(非 nil 时)记录入口探测命中,超阈值经其内部封禁该 IP。
 // recordLogin 登录成功后记录最近登录时间;传 nil 则不记录。
-func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard, loginSecret []byte, cfg *config.Config, banGuard *auth.IPBanGuard, audit func(*int64, string, string, string), recordLogin LoginRecorder) http.Handler {
+func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registry, mgr *module.Manager, totp LoginTOTPVerifier, ipBanned func(ip string) bool, trusted []*net.IPNet, entryPath string, probe *EntryProbeGuard, loginSecret []byte, cfg *config.Config, banGuard *auth.IPBanGuard, audit func(*int64, string, string, string), recordLogin LoginRecorder, listAudit func(limit, offset int, action string) ([]store.AuditEntry, int, error)) http.Handler {
 	clientIP := clientIPFunc(trusted)
 	login := newLoginCookie(loginSecret)
 	r := chi.NewRouter()
@@ -129,6 +130,11 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 			}
 			r.Get("/api/settings", sh.handleGet)
 			r.Put("/api/settings", sh.handlePut)
+		}
+		// 审计日志只读视图(非模块,仅 admin);listAudit==nil 时不注册(基础测试栈)。
+		if listAudit != nil {
+			oh := &auditHandlers{list: listAudit}
+			r.Get("/api/audit", oh.handleList)
 		}
 	})
 

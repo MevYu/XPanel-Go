@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,42 @@ func TestExecRunnerBackupNotWired(t *testing.T) {
 	res := r.run(context.Background(), Job{Type: taskBackupSite, Payload: payload{Target: "site"}})
 	if res.Err == "" {
 		t.Errorf("backup_site should report not-wired error, got %+v", res)
+	}
+}
+
+func TestExecRunnerBackupSiteHookSuccess(t *testing.T) {
+	var got string
+	r := &execRunner{
+		logCutRoot: t.TempDir(), scriptDir: t.TempDir(),
+		backupSite: func(target string) error { got = target; return nil },
+	}
+	res := r.run(context.Background(), Job{Type: taskBackupSite, Payload: payload{Target: "blog"}})
+	if got != "blog" {
+		t.Errorf("hook target = %q, want blog", got)
+	}
+	if res.ExitCode != 0 || res.Err != "" {
+		t.Errorf("want success, got %+v", res)
+	}
+	if !strings.Contains(res.Output, "blog") {
+		t.Errorf("output missing target: %q", res.Output)
+	}
+}
+
+func TestExecRunnerBackupDBHookFailure(t *testing.T) {
+	var got string
+	r := &execRunner{
+		logCutRoot: t.TempDir(), scriptDir: t.TempDir(),
+		backupDB: func(target string) error { got = target; return errors.New("dump exploded") },
+	}
+	res := r.run(context.Background(), Job{Type: taskBackupDB, Payload: payload{Target: "mysql:appdb"}})
+	if got != "mysql:appdb" {
+		t.Errorf("hook target = %q, want mysql:appdb", got)
+	}
+	if res.ExitCode != 1 {
+		t.Errorf("want exit 1 on hook failure, got %+v", res)
+	}
+	if !strings.Contains(res.Output, "dump exploded") {
+		t.Errorf("output missing hook error: %q", res.Output)
 	}
 }
 

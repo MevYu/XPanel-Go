@@ -44,7 +44,8 @@ const accountsSchema = `CREATE TABLE IF NOT EXISTS ftp_accounts (
 	user      TEXT PRIMARY KEY,
 	home      TEXT NOT NULL,
 	readonly  INTEGER NOT NULL DEFAULT 0,
-	enabled   INTEGER NOT NULL DEFAULT 1
+	enabled   INTEGER NOT NULL DEFAULT 1,
+	quota_mb  INTEGER NOT NULL DEFAULT 0
 )`
 
 // settingsStore 读写 ftp_settings 单行与 ftp_accounts 元数据。
@@ -111,14 +112,15 @@ type acctMeta struct {
 	Home     string `json:"home"`
 	Readonly bool   `json:"readonly"`
 	Enabled  bool   `json:"enabled"`
+	QuotaMB  int    `json:"quota_mb"` // 存储配额(MB),0=不限
 }
 
 // upsertAccount 落库账户元数据(创建/改权限)。
 func (s *settingsStore) upsertAccount(m acctMeta) error {
-	_, err := s.db.Exec(`INSERT INTO ftp_accounts (user, home, readonly, enabled)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(user) DO UPDATE SET home=excluded.home, readonly=excluded.readonly, enabled=excluded.enabled`,
-		m.User, m.Home, boolToInt(m.Readonly), boolToInt(m.Enabled))
+	_, err := s.db.Exec(`INSERT INTO ftp_accounts (user, home, readonly, enabled, quota_mb)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(user) DO UPDATE SET home=excluded.home, readonly=excluded.readonly, enabled=excluded.enabled, quota_mb=excluded.quota_mb`,
+		m.User, m.Home, boolToInt(m.Readonly), boolToInt(m.Enabled), m.QuotaMB)
 	return err
 }
 
@@ -134,9 +136,15 @@ func (s *settingsStore) setEnabled(user string, enabled bool) error {
 	return err
 }
 
+// setQuota 更新账户配额元数据(MB)。
+func (s *settingsStore) setQuota(user string, quotaMB int) error {
+	_, err := s.db.Exec(`UPDATE ftp_accounts SET quota_mb = ? WHERE user = ?`, quotaMB, user)
+	return err
+}
+
 // listAccounts 返回所有账户元数据(无口令)。
 func (s *settingsStore) listAccounts() ([]acctMeta, error) {
-	rows, err := s.db.Query(`SELECT user, home, readonly, enabled FROM ftp_accounts ORDER BY user`)
+	rows, err := s.db.Query(`SELECT user, home, readonly, enabled, quota_mb FROM ftp_accounts ORDER BY user`)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +153,7 @@ func (s *settingsStore) listAccounts() ([]acctMeta, error) {
 	for rows.Next() {
 		var m acctMeta
 		var ro, en int
-		if err := rows.Scan(&m.User, &m.Home, &ro, &en); err != nil {
+		if err := rows.Scan(&m.User, &m.Home, &ro, &en, &m.QuotaMB); err != nil {
 			return nil, err
 		}
 		m.Readonly, m.Enabled = ro != 0, en != 0

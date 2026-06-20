@@ -119,6 +119,7 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/delete", m.requireWrite(m.handleDelete))
 	r.Post("/chmod", m.requireWrite(m.handleChmod))
 	r.Post("/chown", m.handleChown) // 内部自查 admin
+	r.Get("/users", m.handleListUsers) // 内部自查 admin
 	r.Post("/compress", m.requireWrite(m.handleCompress))
 	r.Post("/extract", m.requireWrite(m.handleExtract))
 	r.Post("/move", m.requireWrite(m.handleMove))

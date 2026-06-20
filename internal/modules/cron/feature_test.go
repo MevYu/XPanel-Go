@@ -41,6 +41,11 @@ func TestValidatePayload(t *testing.T) {
 		{"logcut empty", taskLogCut, payload{Path: ""}, false},
 		{"backup site ok", taskBackupSite, payload{Target: "my-site.com"}, true},
 		{"backup site bad", taskBackupSite, payload{Target: "a;rm -rf"}, false},
+		{"backup db ok mysql", taskBackupDB, payload{Target: "mysql:appdb"}, true},
+		{"backup db ok postgres", taskBackupDB, payload{Target: "postgres:appdb"}, true},
+		{"backup db no engine", taskBackupDB, payload{Target: "appdb"}, false},
+		{"backup db bad engine", taskBackupDB, payload{Target: "sqlite:appdb"}, false},
+		{"backup db bad name", taskBackupDB, payload{Target: "mysql:a;b"}, false},
 		{"unknown", "wat", payload{}, false},
 	}
 	for _, c := range cases {

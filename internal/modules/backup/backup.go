@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -89,8 +91,9 @@ func (m *Module) Routes(r module.Router) {
 	r.Delete("/jobs/{id}", m.handleDeleteJob) // admin
 	r.Post("/jobs/{id}/prune", m.handlePrune) // admin:按保留份数清理过期本地备份
 
-	r.Get("/records", m.handleListRecords) // admin
-	r.Post("/run", m.handleRun)            // admin:立即执行一次备份
+	r.Get("/records", m.handleListRecords)                  // admin
+	r.Get("/records/{id}/download", m.handleDownloadRecord) // admin:下载本地备份文件
+	r.Post("/run", m.handleRun)                             // admin:立即执行一次备份
 
 	r.Post("/records/{id}/restore", m.handleRestore) // 危险:admin + X-Confirm-Danger
 	r.Delete("/records/{id}", m.handleDeleteRecord)  // 危险:admin + X-Confirm-Danger
@@ -365,6 +368,50 @@ func (m *Module) handleListRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleDownloadRecord 流式下载本地备份文件(attachment)。
+// 远端备份不直接可流式取(文件在 rclone remote 上),返回 400。
+func (m *Module) handleDownloadRecord(w http.ResponseWriter, r *http.Request) {
+	uid, ok := m.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	rec, err := m.bs.getRecord(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if rec.Location != "local" {
+		http.Error(w, "download supported only for local backups; remote files live on the rclone remote", http.StatusBadRequest)
+		return
+	}
+	s, _ := m.bs.settings()
+	// Filename 虽由本模块生成并落库,仍经 SafeJoin 限定在 BackupDir 内(纵深防御,挡手改 DB)。
+	path, perr := system.SafeJoin(s.BackupDir, rec.Filename)
+	if perr != nil {
+		http.Error(w, "invalid backup path", http.StatusBadRequest)
+		return
+	}
+	f, oerr := os.Open(path)
+	if oerr != nil {
+		http.Error(w, "backup file not found", http.StatusGone)
+		return
+	}
+	defer f.Close()
+
+	ctype := "application/octet-stream"
+	if strings.HasSuffix(rec.Filename, ".gz") {
+		ctype = "application/gzip"
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(rec.Filename)+`"`)
+	_, _ = io.Copy(w, f)
+	m.deps.Audit(&uid, "backup.download", rec.Filename, m.clientIP(r))
 }
 
 // runRequest 是 POST /run 的请求体:可指定已存在 job,或一次性指定 target。

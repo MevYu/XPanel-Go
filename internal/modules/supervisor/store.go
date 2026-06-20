@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/MevYu/XPanel-Go/internal/store"
@@ -19,6 +20,8 @@ type Program struct {
 	Directory   string `json:"directory"`
 	AutoRestart bool   `json:"auto_restart"`
 	Numprocs    int    `json:"numprocs"`
+	User        string `json:"user"`
+	Priority    int    `json:"priority"`
 	CreatedBy   *int64 `json:"created_by"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
@@ -31,6 +34,8 @@ const createProgramsTable = `CREATE TABLE IF NOT EXISTS supervisor_programs (
 	directory    TEXT NOT NULL,
 	auto_restart INTEGER NOT NULL DEFAULT 1,
 	numprocs     INTEGER NOT NULL DEFAULT 1,
+	user         TEXT NOT NULL DEFAULT '',
+	priority     INTEGER NOT NULL DEFAULT 999,
 	created_by   INTEGER,
 	created_at   INTEGER NOT NULL,
 	updated_at   INTEGER NOT NULL
@@ -51,15 +56,30 @@ func newSupStore(st *store.Store) (*supStore, error) {
 	if _, err := st.DB.Exec(createProgramsTable); err != nil {
 		return nil, err
 	}
+	// 旧库迁移:为已存在的表补列。新库由 createProgramsTable 已含这两列,
+	// ALTER 会报 "duplicate column name",视为已迁移、忽略。
+	for _, alter := range []string{
+		`ALTER TABLE supervisor_programs ADD COLUMN user TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE supervisor_programs ADD COLUMN priority INTEGER NOT NULL DEFAULT 999`,
+	} {
+		if _, err := st.DB.Exec(alter); err != nil && !isDuplicateColumn(err) {
+			return nil, err
+		}
+	}
 	if _, err := st.DB.Exec(createSettingsTable); err != nil {
 		return nil, err
 	}
 	return &supStore{db: st.DB}, nil
 }
 
+// isDuplicateColumn 判断 ADD COLUMN 是否因列已存在而失败(SQLite 报 "duplicate column name")。
+func isDuplicateColumn(err error) bool {
+	return strings.Contains(err.Error(), "duplicate column")
+}
+
 func (s *supStore) list() ([]Program, error) {
 	rows, err := s.db.Query(`SELECT id, name, command, directory, auto_restart, numprocs,
-		created_by, created_at, updated_at FROM supervisor_programs ORDER BY name`)
+		user, priority, created_by, created_at, updated_at FROM supervisor_programs ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -77,16 +97,16 @@ func (s *supStore) list() ([]Program, error) {
 
 func (s *supStore) get(id int64) (Program, error) {
 	row := s.db.QueryRow(`SELECT id, name, command, directory, auto_restart, numprocs,
-		created_by, created_at, updated_at FROM supervisor_programs WHERE id = ?`, id)
+		user, priority, created_by, created_at, updated_at FROM supervisor_programs WHERE id = ?`, id)
 	return scanProgram(row)
 }
 
 func (s *supStore) create(p Program) (int64, error) {
 	now := time.Now().Unix()
 	res, err := s.db.Exec(`INSERT INTO supervisor_programs
-		(name, command, directory, auto_restart, numprocs, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Command, p.Directory, boolToInt(p.AutoRestart), p.Numprocs, p.CreatedBy, now, now)
+		(name, command, directory, auto_restart, numprocs, user, priority, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Command, p.Directory, boolToInt(p.AutoRestart), p.Numprocs, p.User, p.Priority, p.CreatedBy, now, now)
 	if err != nil {
 		return 0, err
 	}
@@ -97,9 +117,9 @@ func (s *supStore) create(p Program) (int64, error) {
 // 名称唯一约束冲突时返回错误。
 func (s *supStore) update(p Program) error {
 	_, err := s.db.Exec(`UPDATE supervisor_programs
-		SET name = ?, command = ?, directory = ?, auto_restart = ?, numprocs = ?, updated_at = ?
+		SET name = ?, command = ?, directory = ?, auto_restart = ?, numprocs = ?, user = ?, priority = ?, updated_at = ?
 		WHERE id = ?`,
-		p.Name, p.Command, p.Directory, boolToInt(p.AutoRestart), p.Numprocs, time.Now().Unix(), p.ID)
+		p.Name, p.Command, p.Directory, boolToInt(p.AutoRestart), p.Numprocs, p.User, p.Priority, time.Now().Unix(), p.ID)
 	return err
 }
 
@@ -151,7 +171,7 @@ func scanProgram(sc scanner) (Program, error) {
 	var autoRestart int
 	var createdBy sql.NullInt64
 	err := sc.Scan(&p.ID, &p.Name, &p.Command, &p.Directory, &autoRestart, &p.Numprocs,
-		&createdBy, &p.CreatedAt, &p.UpdatedAt)
+		&p.User, &p.Priority, &createdBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return Program{}, err
 	}

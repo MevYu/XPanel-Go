@@ -31,7 +31,7 @@ func TestCreateReadonlyDoesNotPassEmptyR(t *testing.T) {
 	script, recFile := fakePurePW(t)
 	b := &pureFTPd{purePW: script, pureDB: script, uid: "1000", gid: "1000"}
 
-	if err := b.create(context.Background(), "bob", "pw123456", "/home/ftp/bob", true); err != nil {
+	if err := b.create(context.Background(), "bob", "pw123456", "/home/ftp/bob", true, 0); err != nil {
 		t.Fatalf("create returned error: %v", err)
 	}
 	raw, err := os.ReadFile(recFile)
@@ -52,6 +52,40 @@ func TestCreateReadonlyDoesNotPassEmptyR(t *testing.T) {
 	for _, want := range []string{"useradd", "bob", "-u 1000", "-g 1000", "-d /home/ftp/bob", "-m"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("argv missing %q; got %q", want, joined)
+		}
+	}
+	// quota 0 时不应传 -N。
+	if strings.Contains(joined, "-N") {
+		t.Errorf("zero quota must not pass -N; got %q", joined)
+	}
+}
+
+func TestCreatePassesQuotaFlag(t *testing.T) {
+	script, recFile := fakePurePW(t)
+	b := &pureFTPd{purePW: script, pureDB: script, uid: "1000", gid: "1000"}
+	if err := b.create(context.Background(), "bob", "pw123456", "/home/ftp/bob", false, 500); err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	raw, _ := os.ReadFile(recFile)
+	args := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-N 500") {
+		t.Errorf("create with quota must pass -N 500; got %q", joined)
+	}
+}
+
+func TestSetQuotaPassesUsermodN(t *testing.T) {
+	script, recFile := fakePurePW(t)
+	b := &pureFTPd{purePW: script, pureDB: script, uid: "1000", gid: "1000"}
+	if err := b.setQuota(context.Background(), "bob", 1024); err != nil {
+		t.Fatalf("setQuota returned error: %v", err)
+	}
+	raw, _ := os.ReadFile(recFile)
+	args := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"usermod", "bob", "-N 1024", "-m"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("setQuota argv missing %q; got %q", want, joined)
 		}
 	}
 }
