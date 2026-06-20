@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,39 +22,61 @@ func (m *Module) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if site.RootDir == "" {
-		http.Error(w, "site has no directory to back up", http.StatusConflict)
+	id, err := m.backupSite(site, &uid)
+	if err != nil {
+		switch {
+		case errors.Is(err, errSiteNoDir):
+			http.Error(w, "site has no directory to back up", http.StatusConflict)
+		default:
+			log.Printf("sites: backup %q failed: %v", site.Name, err)
+			http.Error(w, "backup failed", http.StatusInternalServerError)
+		}
 		return
 	}
-	set, ok := m.loadSettings(w)
-	if !ok {
-		return
+	m.deps.Audit(&uid, "sites.backup.create", site.Name, m.clientIP(r))
+	created, _ := m.ss.getBackup(id)
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// errSiteNoDir 表示站点无可备份目录,handler 据此回 409。
+var errSiteNoDir = errors.New("site has no directory to back up")
+
+// BackupSite 按站点名打包目录、落库备份记录,返回备份记录 ID。供 cron 钩子复用。
+func (m *Module) BackupSite(siteName string) error {
+	site, err := m.ss.getByName(siteName)
+	if err != nil {
+		return fmt.Errorf("site %q not found: %w", siteName, err)
+	}
+	_, err = m.backupSite(site, nil)
+	return err
+}
+
+// backupSite 是备份核心逻辑:打包 site.RootDir 到 BackupDir,落库元数据。
+// createdBy 为 nil 表示非交互(如 cron)发起。
+func (m *Module) backupSite(site Site, createdBy *int64) (int64, error) {
+	if site.RootDir == "" {
+		return 0, errSiteNoDir
+	}
+	set, err := m.ss.getSettings()
+	if err != nil {
+		return 0, fmt.Errorf("settings load: %w", err)
 	}
 	filename := fmt.Sprintf("%s-%d.tar.gz", site.Name, time.Now().Unix())
 	destPath, err := backupPath(set, filename)
 	if err != nil {
-		log.Printf("sites: backup path %q: %v", filename, err)
-		http.Error(w, "backup failed", http.StatusInternalServerError)
-		return
+		return 0, fmt.Errorf("backup path %q: %w", filename, err)
 	}
 	size, err := m.archiver.Pack(site.RootDir, destPath)
 	if err != nil {
-		log.Printf("sites: backup pack %q failed: %v", site.Name, err)
 		_ = m.archiver.Remove(destPath)
-		http.Error(w, "backup failed", http.StatusInternalServerError)
-		return
+		return 0, fmt.Errorf("pack %q: %w", site.Name, err)
 	}
-	b := Backup{SiteID: site.ID, Filename: filename, Size: size, CreatedBy: &uid}
-	id, err := m.ss.createBackup(b)
+	id, err := m.ss.createBackup(Backup{SiteID: site.ID, Filename: filename, Size: size, CreatedBy: createdBy})
 	if err != nil {
-		log.Printf("sites: backup persist failed: %v", err)
 		_ = m.archiver.Remove(destPath)
-		http.Error(w, "backup failed", http.StatusInternalServerError)
-		return
+		return 0, fmt.Errorf("persist: %w", err)
 	}
-	m.deps.Audit(&uid, "sites.backup.create", site.Name+" "+filename, m.clientIP(r))
-	created, _ := m.ss.getBackup(id)
-	writeJSON(w, http.StatusCreated, created)
+	return id, nil
 }
 
 // handleListBackups 列出站点的全部备份(新到旧)。

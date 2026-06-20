@@ -18,11 +18,15 @@ const (
 	ChannelEmail    ChannelKind = "email"
 	ChannelWebhook  ChannelKind = "webhook"
 	ChannelTelegram ChannelKind = "telegram"
+	ChannelDingtalk ChannelKind = "dingtalk"
+	ChannelWecom    ChannelKind = "wecom"
+	ChannelFeishu   ChannelKind = "feishu"
 )
 
 func validChannelKind(k ChannelKind) bool {
 	switch k {
-	case ChannelEmail, ChannelWebhook, ChannelTelegram:
+	case ChannelEmail, ChannelWebhook, ChannelTelegram,
+		ChannelDingtalk, ChannelWecom, ChannelFeishu:
 		return true
 	}
 	return false

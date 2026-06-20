@@ -16,27 +16,34 @@ import (
 type mockBackend struct {
 	created   []account // 记录创建(含口令,用于断言"口令到了后端而非 DB")
 	createdPw []string
+	createdQ  []int // 记录创建传入的配额(MB)
 	deleted   []string
 	passwords map[string]string
 	toggled   map[string]bool
+	quotas    map[string]int
 	avail     error
 	failNext  bool // 令下一次写操作返回错误
 }
 
 func newMockBackend() *mockBackend {
-	return &mockBackend{passwords: map[string]string{}, toggled: map[string]bool{}}
+	return &mockBackend{passwords: map[string]string{}, toggled: map[string]bool{}, quotas: map[string]int{}}
 }
 
 func (m *mockBackend) list(context.Context) ([]account, error) {
 	return []account{{User: "alice", Home: "/home/ftp/alice"}}, nil
 }
-func (m *mockBackend) create(_ context.Context, user, password, home string, _ bool) error {
+func (m *mockBackend) create(_ context.Context, user, password, home string, _ bool, quotaMB int) error {
 	if m.failNext {
 		m.failNext = false
 		return context.DeadlineExceeded
 	}
 	m.created = append(m.created, account{User: user, Home: home})
 	m.createdPw = append(m.createdPw, password)
+	m.createdQ = append(m.createdQ, quotaMB)
+	return nil
+}
+func (m *mockBackend) setQuota(_ context.Context, user string, quotaMB int) error {
+	m.quotas[user] = quotaMB
 	return nil
 }
 func (m *mockBackend) delete(_ context.Context, user string) error {
@@ -353,6 +360,88 @@ func TestHealthCheckReflectsBackend(t *testing.T) {
 	be.avail = context.Canceled
 	if m.HealthCheck() == nil {
 		t.Error("unavailable backend should fail health")
+	}
+}
+
+func TestCreatePassesQuotaToBackend(t *testing.T) {
+	be := newMockBackend()
+	m := newTestModule(t, "admin", be, &auditRec{})
+	r := router(m)
+	rec := do(r, "POST", "/accounts", `{"user":"bob","password":"pw1234","quota_mb":500}`, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("create got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if len(be.createdQ) != 1 || be.createdQ[0] != 500 {
+		t.Fatalf("backend should receive quota 500, got %v", be.createdQ)
+	}
+	// 配额也落账户元数据。
+	metas, _ := m.ss.listAccounts()
+	if len(metas) != 1 || metas[0].QuotaMB != 500 {
+		t.Fatalf("quota meta not persisted, got %+v", metas)
+	}
+}
+
+func TestCreateRejectsBadQuota(t *testing.T) {
+	be := newMockBackend()
+	m := newTestModule(t, "admin", be, &auditRec{})
+	r := router(m)
+	for _, body := range []string{
+		`{"user":"bob","password":"pw1234","quota_mb":-1}`,
+		`{"user":"bob","password":"pw1234","quota_mb":1048577}`,
+	} {
+		rec := do(r, "POST", "/accounts", body, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("create %s = %d, want 400", body, rec.Code)
+		}
+	}
+	if len(be.created) != 0 {
+		t.Errorf("no account on bad quota, got %d", len(be.created))
+	}
+}
+
+func TestSetQuotaEndpoint(t *testing.T) {
+	be := newMockBackend()
+	ar := &auditRec{}
+	m := newTestModule(t, "admin", be, ar)
+	r := router(m)
+	rec := do(r, "POST", "/accounts/alice/quota", `{"quota_mb":1024}`, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("set quota got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if be.quotas["alice"] != 1024 {
+		t.Fatalf("backend should receive quota 1024, got %v", be.quotas)
+	}
+	if ar.count != 1 {
+		t.Fatalf("quota change should audit once, got %d", ar.count)
+	}
+}
+
+func TestSetQuotaRejectsBadRange(t *testing.T) {
+	be := newMockBackend()
+	m := newTestModule(t, "admin", be, &auditRec{})
+	r := router(m)
+	for _, body := range []string{`{"quota_mb":-1}`, `{"quota_mb":1048577}`} {
+		rec := do(r, "POST", "/accounts/alice/quota", body, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("set quota %s = %d, want 400", body, rec.Code)
+		}
+	}
+	if len(be.quotas) != 0 {
+		t.Errorf("no quota set on bad range, got %v", be.quotas)
+	}
+}
+
+func TestSetQuotaNonAdminForbidden(t *testing.T) {
+	be := newMockBackend()
+	ar := &auditRec{}
+	m := newTestModule(t, "operator", be, ar)
+	r := router(m)
+	rec := do(r, "POST", "/accounts/alice/quota", `{"quota_mb":100}`, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin set quota should 403, got %d", rec.Code)
+	}
+	if len(be.quotas) != 0 || ar.count != 0 {
+		t.Fatal("forbidden quota change must not act or audit")
 	}
 }
 

@@ -37,6 +37,12 @@ func senderFor(kind ChannelKind) (Sender, error) {
 		return webhookSender{client: defaultHTTPClient()}, nil
 	case ChannelTelegram:
 		return telegramSender{client: defaultHTTPClient()}, nil
+	case ChannelDingtalk:
+		return dingtalkSender{client: defaultHTTPClient()}, nil
+	case ChannelWecom:
+		return wecomSender{client: defaultHTTPClient()}, nil
+	case ChannelFeishu:
+		return feishuSender{client: defaultHTTPClient()}, nil
 	}
 	return nil, fmt.Errorf("alert: unknown channel kind %q", kind)
 }
@@ -127,6 +133,61 @@ func (s telegramSender) Send(ctx context.Context, ch Channel, secret string, n N
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return doExpectOK(s.client, req)
+}
+
+// postJSON POST 一段 JSON 到 webhook URL,先过 SSRF 守卫,要求 2xx。
+func postJSON(ctx context.Context, client *http.Client, rawURL string, payload any) error {
+	if rawURL == "" {
+		return fmt.Errorf("alert: webhook_url required")
+	}
+	if err := guardOutboundURL(rawURL); err != nil {
+		return err
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return doExpectOK(client, req)
+}
+
+// dingtalkSender POST 文本消息到钉钉群机器人 webhook(ch.WebhookURL)。
+type dingtalkSender struct{ client *http.Client }
+
+func (s dingtalkSender) Send(ctx context.Context, ch Channel, _ string, n Notification) error {
+	payload := map[string]any{
+		"msgtype": "text",
+		"text":    map[string]string{"content": notifyText(n)},
+	}
+	return postJSON(ctx, s.client, ch.WebhookURL, payload)
+}
+
+// wecomSender POST 文本消息到企业微信群机器人 webhook(ch.WebhookURL)。
+type wecomSender struct{ client *http.Client }
+
+func (s wecomSender) Send(ctx context.Context, ch Channel, _ string, n Notification) error {
+	payload := map[string]any{
+		"msgtype": "text",
+		"text":    map[string]string{"content": notifyText(n)},
+	}
+	return postJSON(ctx, s.client, ch.WebhookURL, payload)
+}
+
+// feishuSender POST 文本消息到飞书群机器人 webhook(ch.WebhookURL)。
+type feishuSender struct{ client *http.Client }
+
+func (s feishuSender) Send(ctx context.Context, ch Channel, _ string, n Notification) error {
+	payload := map[string]any{
+		"msg_type": "text",
+		"content":  map[string]string{"text": notifyText(n)},
+	}
+	return postJSON(ctx, s.client, ch.WebhookURL, payload)
+}
+
+// notifyText 把通知拼成单段文本,与 telegramSender 一致(标题 + 空行 + 正文)。
+func notifyText(n Notification) string {
+	return n.Subject + "\n\n" + n.Body
 }
 
 // doExpectOK 发请求并要求 2xx,否则报错(不把 body 里可能含的 token 回显细节)。

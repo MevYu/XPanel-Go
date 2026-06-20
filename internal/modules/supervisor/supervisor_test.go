@@ -20,12 +20,23 @@ type mockController struct {
 	avail    error
 	writeErr error
 	lastCfg  string
+	configs  map[string]string // name -> 落盘配置内容,供 ReadConfig 回读
 }
 
 func (c *mockController) WriteConfig(_, name, content string) error {
+	if c.writeErr != nil {
+		return c.writeErr
+	}
 	c.writes = append(c.writes, name)
 	c.lastCfg = content
-	return c.writeErr
+	if c.configs == nil {
+		c.configs = map[string]string{}
+	}
+	c.configs[name] = content
+	return nil
+}
+func (c *mockController) ReadConfig(_, name string) (string, error) {
+	return c.configs[name], nil
 }
 func (c *mockController) RemoveConfig(_, name string) error {
 	c.removes = append(c.removes, name)
@@ -110,6 +121,71 @@ func TestCreateHappyPath(t *testing.T) {
 	}
 	if *audited != 1 {
 		t.Fatalf("expected 1 audit, got %d", *audited)
+	}
+}
+
+func TestCreateUserPriorityPersists(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	body := `{"name":"web","command":"/bin/run","directory":"/opt/web","numprocs":1,"user":"www","priority":500}`
+	rec := do(m, "POST", "/programs", body, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"user":"www"`) || !strings.Contains(rec.Body.String(), `"priority":500`) {
+		t.Fatalf("response missing user/priority: %s", rec.Body.String())
+	}
+	if !strings.Contains(ctl.lastCfg, "user=www") || !strings.Contains(ctl.lastCfg, "priority=500") {
+		t.Fatalf("rendered config missing user/priority: %s", ctl.lastCfg)
+	}
+	list := do(m, "GET", "/programs", "", nil)
+	if !strings.Contains(list.Body.String(), `"user":"www"`) || !strings.Contains(list.Body.String(), `"priority":500`) {
+		t.Fatalf("list missing user/priority: %s", list.Body.String())
+	}
+}
+
+func TestCreateDefaultsPriorityAndOmitsUser(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	body := `{"name":"web","command":"/bin/run","directory":"/opt/web","numprocs":1}`
+	rec := do(m, "POST", "/programs", body, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"priority":999`) {
+		t.Fatalf("omitted priority should default to 999: %s", rec.Body.String())
+	}
+	if !strings.Contains(ctl.lastCfg, "priority=999") {
+		t.Fatalf("rendered config should have priority=999: %s", ctl.lastCfg)
+	}
+	if strings.Contains(ctl.lastCfg, "user=") {
+		t.Fatalf("empty user must not render user= line: %s", ctl.lastCfg)
+	}
+}
+
+func TestCreateRejectsInvalidUser(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	body := `{"name":"web","command":"/bin/run","directory":"/opt","numprocs":1,"user":"Bad User!"}`
+	rec := do(m, "POST", "/programs", body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid user should 400, got %d", rec.Code)
+	}
+	if len(ctl.writes) != 0 {
+		t.Fatalf("must not write config on invalid user, got %v", ctl.writes)
+	}
+}
+
+func TestCreateRejectsInvalidPriority(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	body := `{"name":"web","command":"/bin/run","directory":"/opt","numprocs":1,"priority":10000}`
+	rec := do(m, "POST", "/programs", body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid priority should 400, got %d", rec.Code)
+	}
+	if len(ctl.writes) != 0 {
+		t.Fatalf("must not write config on invalid priority, got %v", ctl.writes)
 	}
 }
 
@@ -401,6 +477,95 @@ func TestUpdateRequiresAdmin(t *testing.T) {
 	// 元数据未被改动。
 	if p, _ := m.ss.get(1); p.Name != "web" || p.Command != "/bin/run" {
 		t.Fatalf("forbidden update must not mutate record, got %+v", p)
+	}
+}
+
+func TestGetConfigReturnsContent(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "readonly", ctl)
+	seedProgram(t, cloneRole(m, "admin")) // create 落配置,name "web"
+	rec := do(m, "GET", "/programs/1/config", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get config should 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"content"`) || !strings.Contains(rec.Body.String(), "[program:web]") {
+		t.Fatalf("get config body wrong: %s", rec.Body.String())
+	}
+}
+
+func TestGetConfigNotFound(t *testing.T) {
+	m, _ := newTestModule(t, "readonly", &mockController{})
+	rec := do(m, "GET", "/programs/999/config", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get config unknown id should 404, got %d", rec.Code)
+	}
+}
+
+func TestPutConfigAdminConfirmed(t *testing.T) {
+	ctl := &mockController{}
+	m, audited := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	*audited = 0
+	ctl.reloads = 0
+	body := `{"content":"[program:web]\ncommand=/bin/edited\n"}`
+	rec := do(m, "PUT", "/programs/"+id+"/config", body, map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("put config (admin confirmed) should 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ctl.configs["web"] != "[program:web]\ncommand=/bin/edited\n" {
+		t.Fatalf("controller did not receive new content, got %q", ctl.configs["web"])
+	}
+	if ctl.reloads != 1 {
+		t.Fatalf("expected 1 reload, got %d", ctl.reloads)
+	}
+	if *audited != 1 {
+		t.Fatalf("expected 1 audit, got %d", *audited)
+	}
+}
+
+func TestPutConfigRequiresAdmin(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	writesBefore := len(ctl.writes)
+	op := cloneRole(m, "operator")
+	body := `{"content":"[program:web]\n"}`
+	rec := do(op, "PUT", "/programs/"+id+"/config", body, map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator put config should 403, got %d", rec.Code)
+	}
+	if len(ctl.writes) != writesBefore {
+		t.Fatalf("forbidden put config must not write, got %v", ctl.writes)
+	}
+}
+
+func TestPutConfigRequiresConfirm(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	body := `{"content":"[program:web]\n"}`
+	rec := do(m, "PUT", "/programs/"+id+"/config", body, nil)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("put config without confirm should 428, got %d", rec.Code)
+	}
+}
+
+func TestPutConfigRejectsEmpty(t *testing.T) {
+	ctl := &mockController{}
+	m, _ := newTestModule(t, "admin", ctl)
+	id := seedProgram(t, m)
+	rec := do(m, "PUT", "/programs/"+id+"/config", `{"content":""}`, map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty content should 400, got %d", rec.Code)
+	}
+}
+
+func TestPutConfigNotFound(t *testing.T) {
+	m, _ := newTestModule(t, "admin", &mockController{})
+	body := `{"content":"[program:web]\n"}`
+	rec := do(m, "PUT", "/programs/999/config", body, map[string]string{"X-Confirm-Danger": "yes"})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("put config unknown id should 404, got %d", rec.Code)
 	}
 }
 

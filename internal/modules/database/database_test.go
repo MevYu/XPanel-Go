@@ -12,10 +12,12 @@ import (
 
 // mockSQL 记录收到的 SQL 语句,供断言注入是否被拒/语句是否正确。
 type mockSQL struct {
-	execs   []string
-	queries []string
-	rows    []string            // queryStrings 返回
-	rowMaps []map[string]string // queryRows 返回
+	execs    []string
+	queries  []string
+	rows     []string            // queryStrings 返回
+	rowMaps  []map[string]string // queryRows 返回
+	tableCol []string            // queryTable 返回列名
+	tableRow [][]*string         // queryTable 返回行
 }
 
 func (m *mockSQL) queryStrings(_ context.Context, q string, _ ...any) ([]string, error) {
@@ -25,6 +27,10 @@ func (m *mockSQL) queryStrings(_ context.Context, q string, _ ...any) ([]string,
 func (m *mockSQL) queryRows(_ context.Context, q string, _ ...any) ([]map[string]string, error) {
 	m.queries = append(m.queries, q)
 	return m.rowMaps, nil
+}
+func (m *mockSQL) queryTable(_ context.Context, _ int, q string, _ ...any) ([]string, [][]*string, bool, error) {
+	m.queries = append(m.queries, q)
+	return m.tableCol, m.tableRow, false, nil
 }
 func (m *mockSQL) exec(_ context.Context, q string, _ ...any) error {
 	m.execs = append(m.execs, q)
@@ -58,6 +64,8 @@ func newTestModule(t *testing.T, role string, audited *int) (*Module, *mockSQL, 
 	redis := &mockRedis{}
 	m.mysqlConn = func(context.Context, Settings) (sqlBackend, error) { return sql, nil }
 	m.pgConn = func(context.Context, Settings) (sqlBackend, error) { return sql, nil }
+	m.mysqlConnDB = func(context.Context, Settings, string) (sqlBackend, error) { return sql, nil }
+	m.pgConnDB = func(context.Context, Settings, string) (sqlBackend, error) { return sql, nil }
 	m.redisConn = func(context.Context, Settings) (redisBackend, error) { return redis, nil }
 	return m, sql, redis
 }

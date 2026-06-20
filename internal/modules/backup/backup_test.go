@@ -413,4 +413,55 @@ func TestRemoteFilesList(t *testing.T) {
 	}
 }
 
+func TestDownloadLocalRecordStreamsFile(t *testing.T) {
+	h := newHarness(t, "admin")
+	r := h.router()
+	do(t, r, "POST", "/run", `{"target_kind":"path","target":"/www/site"}`, nil)
+	recs, _ := h.m.bs.listRecords(nil)
+	rec0 := recs[0]
+	id := itoa(rec0.ID)
+
+	rec := do(t, r, "GET", "/records/"+id+"/download", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("download = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "ARCHIVE" {
+		t.Errorf("download body = %q, want file bytes %q", rec.Body.String(), "ARCHIVE")
+	}
+	if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="`+rec0.Filename+`"` {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+}
+
+func TestDownloadRemoteRecordRejected(t *testing.T) {
+	h := newHarness(t, "admin")
+	r := h.router()
+	rrec := do(t, r, "POST", "/remotes", `{"name":"s3","type":"s3","bucket":"b","secret":"x"}`, nil)
+	var rem Remote
+	json.Unmarshal(rrec.Body.Bytes(), &rem)
+	do(t, r, "POST", "/run", `{"target_kind":"path","target":"/www/site","remote_id":`+itoa(rem.ID)+`}`, nil)
+	recs, _ := h.m.bs.listRecords(nil)
+
+	rec := do(t, r, "GET", "/records/"+itoa(recs[0].ID)+"/download", "", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("download remote record = %d, want 400", rec.Code)
+	}
+}
+
+func TestDownloadUnknownRecord(t *testing.T) {
+	h := newHarness(t, "admin")
+	rec := do(t, h.router(), "GET", "/records/9999/download", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("download unknown id = %d, want 404", rec.Code)
+	}
+}
+
+func TestDownloadNonAdminForbidden(t *testing.T) {
+	h := newHarness(t, "operator")
+	rec := do(t, h.router(), "GET", "/records/1/download", "", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("operator download = %d, want 403", rec.Code)
+	}
+}
+
 func itoa(i int64) string { return strconv.FormatInt(i, 10) }

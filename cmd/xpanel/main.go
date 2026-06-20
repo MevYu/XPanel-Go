@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -111,11 +112,12 @@ func main() {
 		Audit:     auditFn,
 		ClientIP:  clientIP,
 	}))
-	reg.Register(cron.New(st, cron.Deps{
+	cronMod := cron.New(st, cron.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
 		ClientIP:  clientIP,
-	}))
+	})
+	reg.Register(cronMod)
 	reg.Register(firewall.New(firewall.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
@@ -135,16 +137,18 @@ func main() {
 		log.Fatalf("files module: %v", err)
 	}
 	reg.Register(filesMod)
-	reg.Register(database.New(cfg.JWTSecret, st, database.Deps{
+	databaseMod := database.New(cfg.JWTSecret, st, database.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
 		ClientIP:  clientIP,
-	}))
-	reg.Register(sites.New(st, sites.Deps{
+	})
+	reg.Register(databaseMod)
+	sitesMod := sites.New(st, sites.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
 		ClientIP:  clientIP,
-	}))
+	})
+	reg.Register(sitesMod)
 	reg.Register(ssl.New(st, nil, ssl.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
@@ -267,6 +271,18 @@ func main() {
 		Audit:     auditFn,
 		ClientIP:  clientIP,
 	})
+	// cron 的备份任务经钩子联动 sites/database(cron 先于二者构造,故此处后补)。
+	cronMod.SetBackupHooks(
+		sitesMod.BackupSite,
+		func(target string) error {
+			engine, name, ok := strings.Cut(target, ":")
+			if !ok {
+				return fmt.Errorf("backup_db target %q must be \"<engine>:<database>\"", target)
+			}
+			return databaseMod.BackupDatabase(engine, name)
+		},
+	)
+
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		log.Fatalf("module restore: %v", err)

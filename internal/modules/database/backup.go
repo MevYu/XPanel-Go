@@ -126,46 +126,73 @@ func (m *Module) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errInvalidIdent.Error(), http.StatusBadRequest)
 		return
 	}
-	eff, err := m.ss.effective()
-	if err != nil {
-		log.Printf("database: settings load failed: %v", err)
-		http.Error(w, "settings unavailable", http.StatusInternalServerError)
-		return
-	}
-	if err := os.MkdirAll(eff.BackupDir, 0o700); err != nil {
-		log.Printf("database: mkdir backup dir failed: %v", err)
-		http.Error(w, "backup directory unavailable", http.StatusInternalServerError)
-		return
-	}
-	filename := backupFilename(engine, name)
-	dest, err := system.SafeJoin(eff.BackupDir, filename)
-	if err != nil {
-		http.Error(w, "invalid backup path", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-	defer cancel()
-	size, derr := m.dumper.dump(ctx, engine, name, dest, eff)
+	id, derr := m.backupDatabase(r.Context(), engine, name)
 	outcome := "ok"
 	if derr != nil {
 		outcome = "failed"
-		_ = os.Remove(dest)
 	}
 	m.deps.Audit(&uid, engine+".backup", "db="+name+" "+outcome, m.clientIP(r))
 	if derr != nil {
-		log.Printf("database: backup %s %s failed: %v", engine, name, derr)
-		http.Error(w, "backup failed", http.StatusBadGateway)
-		return
-	}
-	id, err := m.bs.insert(engine, name, filename, size)
-	if err != nil {
-		log.Printf("database: backup record insert failed: %v", err)
-		http.Error(w, "backup record failed", http.StatusInternalServerError)
+		switch {
+		case errors.Is(derr, errBackupSettings), errors.Is(derr, errBackupDir):
+			http.Error(w, "backup unavailable", http.StatusInternalServerError)
+		case errors.Is(derr, errBackupRecord):
+			http.Error(w, "backup record failed", http.StatusInternalServerError)
+		default:
+			log.Printf("database: backup %s %s failed: %v", engine, name, derr)
+			http.Error(w, "backup failed", http.StatusBadGateway)
+		}
 		return
 	}
 	rec, _ := m.bs.get(id)
 	writeJSON(w, http.StatusOK, rec)
+}
+
+var (
+	errBackupSettings = errors.New("settings unavailable")
+	errBackupDir      = errors.New("backup directory unavailable")
+	errBackupRecord   = errors.New("backup record failed")
+)
+
+// BackupDatabase 转储单库到 BackupDir 并落库记录,返回记录 ID。供 cron 钩子复用。
+// 调用方负责 engine/dbName 的合法性(此处仍做白名单兜底,纵深防御)。
+func (m *Module) BackupDatabase(engine, dbName string) error {
+	if !backupEngine(engine) {
+		return fmt.Errorf("unsupported engine %q: must be mysql or postgres", engine)
+	}
+	if !validIdent(dbName) {
+		return errInvalidIdent
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	_, err := m.backupDatabase(ctx, engine, dbName)
+	return err
+}
+
+// backupDatabase 是备份核心逻辑:转储到 BackupDir,落库记录,返回记录 ID。
+func (m *Module) backupDatabase(ctx context.Context, engine, dbName string) (int64, error) {
+	eff, err := m.ss.effective()
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", errBackupSettings, err)
+	}
+	if err := os.MkdirAll(eff.BackupDir, 0o700); err != nil {
+		return 0, fmt.Errorf("%w: %v", errBackupDir, err)
+	}
+	filename := backupFilename(engine, dbName)
+	dest, err := system.SafeJoin(eff.BackupDir, filename)
+	if err != nil {
+		return 0, fmt.Errorf("invalid backup path: %w", err)
+	}
+	size, err := m.dumper.dump(ctx, engine, dbName, dest, eff)
+	if err != nil {
+		_ = os.Remove(dest)
+		return 0, err
+	}
+	id, err := m.bs.insert(engine, dbName, filename, size)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", errBackupRecord, err)
+	}
+	return id, nil
 }
 
 func (m *Module) handleBackupList(w http.ResponseWriter, r *http.Request) {

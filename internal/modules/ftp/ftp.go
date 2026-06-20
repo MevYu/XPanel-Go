@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -70,6 +71,7 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/accounts", m.handleCreate)                              // 创建(admin)
 	r.Delete("/accounts/{user}", m.handleDelete)                     // 删除(admin + 危险确认)
 	r.Post("/accounts/{user}/password", m.handlePassword)            // 改密(admin)
+	r.Post("/accounts/{user}/quota", m.handleQuota)                  // 改配额(admin)
 	r.Post("/accounts/{user}/{verb:enable|disable}", m.handleToggle) // 启停(admin)
 }
 
@@ -79,6 +81,12 @@ type accountRequest struct {
 	Password string `json:"password"`
 	Home     string `json:"home"`
 	Readonly bool   `json:"readonly"`
+	QuotaMB  int    `json:"quota_mb"` // 存储配额(MB),0=不限
+}
+
+// quotaRequest 是修改账户配额的请求体。
+type quotaRequest struct {
+	QuotaMB int `json:"quota_mb"` // 存储配额(MB),0=不限
 }
 
 func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +121,10 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errInvalidPassword.Error(), http.StatusBadRequest)
 		return
 	}
+	if !validQuota(req.QuotaMB) {
+		http.Error(w, errInvalidQuota.Error(), http.StatusBadRequest)
+		return
+	}
 	eff, err := m.ss.effective()
 	if err != nil {
 		log.Printf("ftp: settings load failed: %v", err)
@@ -129,7 +141,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cerr := m.be.create(r.Context(), req.User, req.Password, home, req.Readonly)
+	cerr := m.be.create(r.Context(), req.User, req.Password, home, req.Readonly, req.QuotaMB)
 	outcome := "ok"
 	if cerr != nil {
 		outcome = "failed"
@@ -141,7 +153,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ftp account create failed", http.StatusBadGateway)
 		return
 	}
-	if err := m.ss.upsertAccount(acctMeta{User: req.User, Home: home, Readonly: req.Readonly, Enabled: true}); err != nil {
+	if err := m.ss.upsertAccount(acctMeta{User: req.User, Home: home, Readonly: req.Readonly, Enabled: true, QuotaMB: req.QuotaMB}); err != nil {
 		log.Printf("ftp: persist account meta failed: %v", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -210,6 +222,43 @@ func (m *Module) handlePassword(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ftp: passwd %q failed: %v", user, perr)
 		http.Error(w, "ftp password change failed", http.StatusBadGateway)
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *Module) handleQuota(w http.ResponseWriter, r *http.Request) {
+	uid, role := m.deps.Principal(r)
+	if role != "admin" {
+		http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
+		return
+	}
+	user := chi.URLParamFromCtx(r.Context(), "user")
+	if !validUser(user) {
+		http.Error(w, errInvalidUser.Error(), http.StatusBadRequest)
+		return
+	}
+	var req quotaRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if !validQuota(req.QuotaMB) {
+		http.Error(w, errInvalidQuota.Error(), http.StatusBadRequest)
+		return
+	}
+	qerr := m.be.setQuota(r.Context(), user, req.QuotaMB)
+	outcome := "ok"
+	if qerr != nil {
+		outcome = "failed"
+	}
+	m.deps.Audit(&uid, "ftp.quota", "user="+user+" quota_mb="+strconv.Itoa(req.QuotaMB)+" "+outcome, m.clientIP(r))
+	if qerr != nil {
+		log.Printf("ftp: quota %q failed: %v", user, qerr)
+		http.Error(w, "ftp quota change failed", http.StatusBadGateway)
+		return
+	}
+	if err := m.ss.setQuota(user, req.QuotaMB); err != nil {
+		log.Printf("ftp: persist quota meta failed: %v", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

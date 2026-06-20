@@ -29,11 +29,13 @@ type Module struct {
 	bs   *backupStore
 	deps Deps
 
-	mysqlConn dbConnector
-	pgConn    dbConnector
-	redisConn redisConnector
-	dumper    dumpRestorer
-	dumpRun   dumpRunner
+	mysqlConn   dbConnector
+	pgConn      dbConnector
+	mysqlConnDB dbConnectorDB // 连到指定库(数据浏览/任意 SQL)
+	pgConnDB    dbConnectorDB // 连到指定库(PG per-database)
+	redisConn   redisConnector
+	dumper      dumpRestorer
+	dumpRun     dumpRunner
 }
 
 // New 建表并返回模块。secret 用于派生连接密码的 AES-GCM 密钥。
@@ -52,14 +54,16 @@ func New(secret string, st *store.Store, deps Deps) *Module {
 		panic("database: init backup store: " + err.Error())
 	}
 	return &Module{
-		ss:        ss,
-		bs:        bs,
-		deps:      deps,
-		mysqlConn: mysqlConnector,
-		pgConn:    pgConnector,
-		redisConn: realRedisConnector,
-		dumper:    cmdDumpRestorer{},
-		dumpRun:   execDumpRunner{},
+		ss:          ss,
+		bs:          bs,
+		deps:        deps,
+		mysqlConn:   mysqlConnector,
+		pgConn:      pgConnector,
+		mysqlConnDB: mysqlConnectorDB,
+		pgConnDB:    pgConnectorDB,
+		redisConn:   realRedisConnector,
+		dumper:      cmdDumpRestorer{},
+		dumpRun:     execDumpRunner{},
 	}
 }
 
@@ -93,6 +97,9 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/mysql/revoke", m.handler(dialectMySQL, opRevoke))
 	r.Get("/mysql/export", m.handleExport(dialectMySQL))  // 导出某库为 .sql(可 gzip,下载)
 	r.Post("/mysql/import", m.handleImport(dialectMySQL)) // 导入上传 .sql(危险)
+	r.Get("/mysql/tables", m.handleTables(dialectMySQL))  // 列某库的表(行数估计)
+	r.Get("/mysql/rows", m.handleRows(dialectMySQL))      // 分页浏览某表数据
+	r.Post("/mysql/query", m.handleQuery(dialectMySQL))   // 执行任意 SQL(危险)
 
 	// PostgreSQL
 	r.Get("/postgres/databases", m.handler(dialectPG, opListDB))
@@ -106,9 +113,15 @@ func (m *Module) Routes(r module.Router) {
 	r.Post("/postgres/revoke", m.handler(dialectPG, opRevoke))
 	r.Get("/postgres/export", m.handleExport(dialectPG))  // 导出某库为 .sql(可 gzip,下载)
 	r.Post("/postgres/import", m.handleImport(dialectPG)) // 导入上传 .sql(危险)
+	r.Get("/postgres/tables", m.handleTables(dialectPG))  // 列某库的表
+	r.Get("/postgres/rows", m.handleRows(dialectPG))      // 分页浏览某表数据
+	r.Post("/postgres/query", m.handleQuery(dialectPG))   // 执行任意 SQL(危险)
 
 	// 库级备份/恢复(在 DB 管理处直接操作,跨 mysql/postgres)
 	m.backupRoutes(r)
+
+	// 管理类高危操作:超级用户改密、表维护、字符集转换
+	m.adminRoutes(r)
 
 	// Redis
 	r.Get("/redis/info", m.handleRedisInfo)
