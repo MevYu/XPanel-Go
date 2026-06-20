@@ -301,7 +301,7 @@ func main() {
 			log.Printf("record login for user %d: %v", userID, err)
 		}
 	}
-	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath(), probeGuard, secret, &cfg, banGuard, auditFn, recordLogin)
+	h := server.NewWithModules(svc, jm, reg, mgr, loginTOTP, banGuard.Banned, trustedProxies, cfg.NormalizedEntryPath(), probeGuard, secret, &cfg, banGuard, auditFn, recordLogin, st.ListAudit)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,

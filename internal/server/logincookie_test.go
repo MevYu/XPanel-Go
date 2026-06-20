@@ -204,7 +204,7 @@ func TestEntryGateE2ECookieRedirect(t *testing.T) {
 	}
 	var banned []string
 	probe := NewEntryProbeGuard(0, time.Hour, func(ip string) { banned = append(banned, ip) }, time.Now)
-	h := NewWithModules(svc, jm, reg, mgr, nil, nil, nil, entry, probe, cookieSecret, nil, nil, nil, nil)
+	h := NewWithModules(svc, jm, reg, mgr, nil, nil, nil, entry, probe, cookieSecret, nil, nil, nil, nil, nil)
 
 	lc := newLoginCookie(cookieSecret)
 	withCookie := func(path string) *httptest.ResponseRecorder {
@@ -255,7 +255,7 @@ func newModuleServerForCookie(t *testing.T) http.Handler {
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	return NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/secret", nil, cookieSecret, nil, nil, nil, nil)
+	return NewWithModules(svc, jm, reg, mgr, nil, nil, nil, "/secret", nil, cookieSecret, nil, nil, nil, nil, nil)
 }
 
 func decodeJSON(rec *httptest.ResponseRecorder, v any) error {

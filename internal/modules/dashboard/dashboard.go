@@ -4,16 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/shirou/gopsutil/v3/host"
 
 	"github.com/MevYu/XPanel-Go/internal/module"
 	"github.com/MevYu/XPanel-Go/internal/system"
 )
+
+// panelVersion 与 cmd/xpanel 启动日志中的版本号保持一致。
+const panelVersion = "0.0.1"
 
 // Module 是常驻的系统总览模块:暴露指标快照与 WS 实时推送。
 type Module struct{}
@@ -68,6 +73,60 @@ func (*Module) Routes(r module.Router) {
 		}
 		writeJSON(w, procs)
 	})
+	r.Get("/sysinfo", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, sysInfo())
+	})
+}
+
+type sysInfoResp struct {
+	Hostname     string `json:"hostname"`
+	OS           string `json:"os"`
+	Kernel       string `json:"kernel"`
+	Arch         string `json:"arch"`
+	PrivateIP    string `json:"private_ip"`
+	PublicIP     string `json:"public_ip"`
+	PanelVersion string `json:"panel_version"`
+}
+
+// sysInfo 收集只读系统信息;任一来源失败仅留空对应字段,不整体报错。
+func sysInfo() sysInfoResp {
+	resp := sysInfoResp{PrivateIP: privateIPv4(), PanelVersion: panelVersion}
+	if h, err := host.Info(); err == nil {
+		resp.Hostname = h.Hostname
+		resp.OS = h.Platform + " " + h.PlatformVersion
+		resp.Kernel = h.KernelVersion
+		resp.Arch = h.KernelArch
+	}
+	return resp
+}
+
+// privateIPv4 返回首个非回环、非链路本地的 IPv4 地址,无则返回空串。
+func privateIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipnet.IP.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+				continue
+			}
+			return ip4.String()
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

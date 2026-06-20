@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -55,6 +56,31 @@ func TestProcessesEndpoint(t *testing.T) {
 	body := rec.Body.String()
 	if !contains(body, "pid") || !contains(body, "cpu_percent") {
 		t.Errorf("processes body missing keys: %s", body)
+	}
+}
+
+func TestSysInfoEndpoint(t *testing.T) {
+	r := chi.NewRouter()
+	New().Routes(r)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/sysinfo", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sysinfo status %d", rec.Code)
+	}
+	var info map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatalf("sysinfo body not JSON object: %v: %s", err, rec.Body.String())
+	}
+	for _, key := range []string{"hostname", "os", "kernel", "arch", "private_ip", "public_ip", "panel_version"} {
+		if _, ok := info[key]; !ok {
+			t.Errorf("sysinfo body missing key %q: %s", key, rec.Body.String())
+		}
+	}
+	if info["hostname"] == "" {
+		t.Errorf("sysinfo hostname should be non-empty in test runtime: %s", rec.Body.String())
+	}
+	if info["panel_version"] == "" {
+		t.Errorf("sysinfo panel_version should be non-empty: %s", rec.Body.String())
 	}
 }
 
