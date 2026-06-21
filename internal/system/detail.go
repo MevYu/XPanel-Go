@@ -52,6 +52,7 @@ type MemDetail struct {
 // DetailMetrics 是一次细化系统快照,补充 Snapshot 之外的指标。
 type DetailMetrics struct {
 	CPUPerCore []float64      `json:"cpu_per_core"`
+	CPUIOWait  float64        `json:"cpu_iowait_percent"`
 	Load       LoadAvg        `json:"load"`
 	Memory     MemDetail      `json:"memory"`
 	Network    []NetInterface `json:"network"`
@@ -70,6 +71,8 @@ func DetailSnapshot() (DetailMetrics, error) {
 		return d, err
 	}
 	d.CPUPerCore = perCore
+
+	d.CPUIOWait = cpuIOWaitPercent()
 
 	if avg, err := load.Avg(); err == nil {
 		d.Load = LoadAvg{Load1: avg.Load1, Load5: avg.Load5, Load15: avg.Load15}
@@ -109,6 +112,43 @@ func DetailSnapshot() (DetailMetrics, error) {
 		d.BootTime = bt
 	}
 	return d, nil
+}
+
+// cpuIOWaitPercent 用聚合 CPU 时间两次采样差分算 iowait 占比(0-100)。
+// 无状态:自取 100ms 窗口,与 CPUPerCore 同风格。取不到或平台无 iowait 时降级为 0。
+func cpuIOWaitPercent() float64 {
+	t1, err := cpu.Times(false)
+	if err != nil || len(t1) == 0 {
+		return 0
+	}
+	time.Sleep(100 * time.Millisecond)
+	t2, err := cpu.Times(false)
+	if err != nil || len(t2) == 0 {
+		return 0
+	}
+
+	totalDelta := cpuTotal(t2[0]) - cpuTotal(t1[0])
+	if totalDelta <= 0 {
+		return 0
+	}
+	iowaitDelta := t2[0].Iowait - t1[0].Iowait
+	if iowaitDelta < 0 {
+		return 0
+	}
+	pct := iowaitDelta / totalDelta * 100
+	if pct < 0 {
+		return 0
+	}
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
+// cpuTotal 是单个 cpu.TimesStat 的所有时间分量之和(秒)。
+func cpuTotal(t cpu.TimesStat) float64 {
+	return t.User + t.System + t.Idle + t.Nice + t.Iowait +
+		t.Irq + t.Softirq + t.Steal + t.Guest + t.GuestNice
 }
 
 // networkCounters 返回每网卡累计计数(pernic=true)。

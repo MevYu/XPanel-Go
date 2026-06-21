@@ -82,6 +82,30 @@ func TestSysInfoEndpoint(t *testing.T) {
 	if info["panel_version"] == "" {
 		t.Errorf("sysinfo panel_version should be non-empty: %s", rec.Body.String())
 	}
+	if st, ok := info["server_time"].(float64); !ok || st <= 0 {
+		t.Errorf("sysinfo server_time should be a positive unix timestamp: %s", rec.Body.String())
+	}
+}
+
+func TestDiskPartitionsEndpoint(t *testing.T) {
+	r := chi.NewRouter()
+	New().Routes(r)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/disk-partitions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disk-partitions status %d", rec.Code)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &parts); err != nil {
+		t.Fatalf("disk-partitions body not JSON array: %v: %s", err, rec.Body.String())
+	}
+	for i, p := range parts {
+		for _, key := range []string{"device", "mountpoint", "fstype", "total", "used", "free", "used_percent"} {
+			if _, ok := p[key]; !ok {
+				t.Errorf("partition[%d] missing key %q: %s", i, key, rec.Body.String())
+			}
+		}
+	}
 }
 
 func contains(s, sub string) bool { return len(s) >= len(sub) && (indexOf(s, sub) >= 0) }

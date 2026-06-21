@@ -76,6 +76,14 @@ func (*Module) Routes(r module.Router) {
 	r.Get("/sysinfo", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, sysInfo())
 	})
+	r.Get("/disk-partitions", func(w http.ResponseWriter, _ *http.Request) {
+		parts, err := system.DiskPartitions()
+		if err != nil {
+			http.Error(w, "disk partitions unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, parts)
+	})
 }
 
 type sysInfoResp struct {
@@ -86,11 +94,12 @@ type sysInfoResp struct {
 	PrivateIP    string `json:"private_ip"`
 	PublicIP     string `json:"public_ip"`
 	PanelVersion string `json:"panel_version"`
+	ServerTime   int64  `json:"server_time"`
 }
 
 // sysInfo 收集只读系统信息;任一来源失败仅留空对应字段,不整体报错。
 func sysInfo() sysInfoResp {
-	resp := sysInfoResp{PrivateIP: privateIPv4(), PanelVersion: panelVersion}
+	resp := sysInfoResp{PrivateIP: privateIPv4(), PanelVersion: panelVersion, ServerTime: time.Now().Unix()}
 	if h, err := host.Info(); err == nil {
 		resp.Hostname = h.Hostname
 		resp.OS = h.Platform + " " + h.PlatformVersion

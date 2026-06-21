@@ -1,7 +1,9 @@
 package system
 
 import (
+	"encoding/json"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +20,10 @@ func TestDetailSnapshot(t *testing.T) {
 		if p < 0 || p > 100 {
 			t.Errorf("core %d percent out of range: %f", i, p)
 		}
+	}
+
+	if d.CPUIOWait < 0 || d.CPUIOWait > 100 {
+		t.Errorf("CPUIOWait out of range: %f", d.CPUIOWait)
 	}
 
 	if d.Memory.Total == 0 {
@@ -40,5 +46,13 @@ func TestDetailSnapshot(t *testing.T) {
 		if d.Load.Load1 < 0 || d.Load.Load5 < 0 || d.Load.Load15 < 0 {
 			t.Errorf("load avg negative: %+v", d.Load)
 		}
+	}
+
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"cpu_iowait_percent"`) {
+		t.Errorf("cpu_iowait_percent missing from JSON: %s", b)
 	}
 }

@@ -17,6 +17,7 @@ func ValidUnitName(name string) bool {
 // 允许的 systemctl 动词。status 只读;其余为状态变更(调用方需做 RBAC)。
 var allowedVerbs = map[string]bool{
 	"status": true, "start": true, "stop": true, "restart": true,
+	"reload": true, "enable": true, "disable": true,
 }
 
 // ServiceAction 用参数数组执行 systemctl <verb> <unit>,绝不拼接 shell。

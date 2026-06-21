@@ -15,10 +15,14 @@ var errBoom = errors.New("boom")
 type fakeRunner struct {
 	units, files       string
 	unitsErr, filesErr error
+	versions           map[string]string // name -> version,缺失返回空
 }
 
 func (f *fakeRunner) listUnits() (string, error)     { return f.units, f.unitsErr }
 func (f *fakeRunner) listUnitFiles() (string, error) { return f.files, f.filesErr }
+func (f *fakeRunner) serviceVersion(name string) string {
+	return f.versions[name]
+}
 
 func newWithRunner(deps Deps, r commandRunner) *Module {
 	m := New(deps)
