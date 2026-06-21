@@ -114,3 +114,32 @@ func TestListServicesPropagatesRunnerError(t *testing.T) {
 		t.Fatal("listServices must surface runner error")
 	}
 }
+
+func TestListServicesFillsVersion(t *testing.T) {
+	r := &fakeRunner{
+		units: sampleListUnits, files: sampleListUnitFiles,
+		versions: map[string]string{"nginx.service": "1.25.3"},
+	}
+	got, err := listServices(r)
+	if err != nil {
+		t.Fatalf("listServices: %v", err)
+	}
+	byName := map[string]Service{}
+	for _, s := range got {
+		byName[s.Name] = s
+	}
+	if byName["nginx.service"].Version != "1.25.3" {
+		t.Errorf("nginx version = %q, want 1.25.3", byName["nginx.service"].Version)
+	}
+	// 未知/无探测结果的服务版本为空。
+	if byName["ssh.service"].Version != "" {
+		t.Errorf("ssh version should be empty, got %q", byName["ssh.service"].Version)
+	}
+}
+
+func TestServiceVersionParsesAndDefaults(t *testing.T) {
+	// 未知服务名直接空,不执行任何命令。
+	if v := (systemctlRunner{}).serviceVersion("totally-unknown.service"); v != "" {
+		t.Errorf("unknown service version should be empty, got %q", v)
+	}
+}

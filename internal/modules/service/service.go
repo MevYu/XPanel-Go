@@ -24,9 +24,13 @@ type Deps struct {
 type Module struct {
 	deps   Deps
 	runner commandRunner // 默认走真实 systemctl;测试注入样本
+	// action 执行状态变更动词,默认 system.ServiceAction;测试注入 stub 以避免真实 exec。
+	action func(verb, unit string) (string, error)
 }
 
-func New(deps Deps) *Module { return &Module{deps: deps, runner: systemctlRunner{}} }
+func New(deps Deps) *Module {
+	return &Module{deps: deps, runner: systemctlRunner{}, action: system.ServiceAction}
+}
 
 func (*Module) Meta() module.ModuleMeta {
 	return module.ModuleMeta{ID: "service", Name: "服务管理", Category: "系统"}
@@ -43,9 +47,9 @@ func (*Module) Stop(context.Context) error  { return nil }
 func (*Module) HealthCheck() error { return system.SystemctlAvailable() }
 
 func (m *Module) Routes(r module.Router) {
-	r.Get("/status", m.handleStatus)                     // 只读:任意已认证角色
-	r.Get("/services", m.handleListServices)             // 只读:列出系统服务
-	r.Post("/{verb:start|stop|restart}", m.handleAction) // 写:需 operator+
+	r.Get("/status", m.handleStatus)                                           // 只读:任意已认证角色
+	r.Get("/services", m.handleListServices)                                   // 只读:列出系统服务
+	r.Post("/{verb:start|stop|restart|reload|enable|disable}", m.handleAction) // 写:需 admin + 确认头
 }
 
 func (m *Module) handleListServices(w http.ResponseWriter, _ *http.Request) {
@@ -75,19 +79,29 @@ func (m *Module) handleStatus(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(out))
 }
 
+// handleAction 执行状态变更动词。校验顺序:
+// ValidUnitName -> admin -> X-Confirm-Danger -> unit 在服务列表内 -> 执行 -> 审计。
 func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
-	uid, role := m.deps.Principal(r)
-	if role != "admin" && role != "operator" {
-		http.Error(w, "forbidden: requires operator role", http.StatusForbidden)
-		return
-	}
 	unit := r.URL.Query().Get("unit")
 	if !system.ValidUnitName(unit) {
 		http.Error(w, "invalid unit name", http.StatusBadRequest)
 		return
 	}
+	uid, role := m.deps.Principal(r)
+	if role != "admin" {
+		http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
+		return
+	}
+	if r.Header.Get("X-Confirm-Danger") == "" {
+		http.Error(w, "missing X-Confirm-Danger header", http.StatusPreconditionRequired)
+		return
+	}
+	if !m.unitInList(unit) {
+		http.Error(w, "unknown unit", http.StatusBadRequest)
+		return
+	}
 	verb := chi.URLParamFromCtx(r.Context(), "verb")
-	out, err := system.ServiceAction(verb, unit)
+	out, err := m.action(verb, unit)
 	outcome := "ok"
 	if err != nil {
 		outcome = "failed"
@@ -100,6 +114,20 @@ func (m *Module) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(out))
+}
+
+// unitInList 判断 unit 是否在当前服务列表中,作为白名单约束。列举失败时拒绝。
+func (m *Module) unitInList(unit string) bool {
+	services, err := listServices(m.runner)
+	if err != nil {
+		return false
+	}
+	for i := range services {
+		if services[i].Name == unit {
+			return true
+		}
+	}
+	return false
 }
 
 // clientIP 取真实客户端 IP:有受信代理感知的提取器则用之,否则回退 RemoteAddr。
