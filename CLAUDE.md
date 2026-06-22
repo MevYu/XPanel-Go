@@ -44,6 +44,7 @@ govulncheck ./...            # 漏洞扫描
 - 需绕过面板登录的端点实现 `PublicRouter`，经 `MountPublic` 挂在 `PublicPrefix()`（如 `/s/`）下，模块自鉴权（token/ticket）。
 - fleet（多机集群，依赖 NATS）走 `-tags fleet`，默认构建不编入。
 - 模块 `Meta().ID` 重复会 panic（启动期暴露）。
+- `HealthCheck()` 返回依赖的宿主软件是否安装/就绪（经 `/api/modules` 的 `health.{ok,reason}` 暴露，前端 `InstallGate` 据此盖"未安装"遮罩）；失败不阻止启用，仅作前端提示。探测软件存在性用 `exec.LookPath` / 连 socket / `systemctl`，参数数组、带超时、失败降级。
 
 ## 注意事项
 
