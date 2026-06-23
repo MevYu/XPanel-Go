@@ -76,7 +76,7 @@ func TestLoginFailuresBanIPAcrossAllEndpoints(t *testing.T) {
 	}
 
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{Principal: PrincipalFromRequest}))
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)
@@ -124,7 +124,7 @@ func TestEntryProbeBansScannerAcrossAllEndpoints(t *testing.T) {
 	svc := auth.NewService(st, jm, auth.NewLockout(5, time.Minute, time.Now)).WithIPBan(guard)
 
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{Principal: PrincipalFromRequest}))
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)

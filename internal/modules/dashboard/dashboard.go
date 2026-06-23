@@ -14,16 +14,32 @@ import (
 	"github.com/shirou/gopsutil/v3/host"
 
 	"github.com/MevYu/XPanel-Go/internal/module"
+	"github.com/MevYu/XPanel-Go/internal/store"
 	"github.com/MevYu/XPanel-Go/internal/system"
 )
 
 // panelVersion 与 cmd/xpanel 启动日志中的版本号保持一致。
 const panelVersion = "0.0.1"
 
-// Module 是常驻的系统总览模块:暴露指标快照与 WS 实时推送。
-type Module struct{}
+// Deps 注入宿主能力(取主体角色),避免反向依赖 server 包。
+type Deps struct {
+	Principal func(*http.Request) (userID int64, role string) // 取当前登录主体
+}
 
-func New() *Module { return &Module{} }
+// Module 是常驻的系统总览模块:暴露指标快照与 WS 实时推送,并存「首页软件配置」。
+type Module struct {
+	ds   *dashStore
+	deps Deps
+}
+
+// New 建表(幂等)并返回模块。建表失败(DB 不可用)直接 panic:模块无法工作。
+func New(st *store.Store, deps Deps) *Module {
+	ds, err := newDashStore(st)
+	if err != nil {
+		panic("dashboard: init store: " + err.Error())
+	}
+	return &Module{ds: ds, deps: deps}
+}
 
 func (*Module) Meta() module.ModuleMeta {
 	return module.ModuleMeta{
@@ -39,7 +55,7 @@ func (*Module) Start(context.Context) error { return nil }
 func (*Module) Stop(context.Context) error  { return nil }
 func (*Module) HealthCheck() error          { return nil }
 
-func (*Module) Routes(r module.Router) {
+func (m *Module) Routes(r module.Router) {
 	r.Get("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		snap, err := system.Snapshot()
 		if err != nil {
@@ -84,17 +100,71 @@ func (*Module) Routes(r module.Router) {
 		}
 		writeJSON(w, parts)
 	})
+
+	r.Get("/home-apps", m.handleGetHomeApps) // 只读:任意已认证角色
+	r.Put("/home-apps", m.handlePutHomeApps) // 写:admin
+}
+
+// maxHomeApps 是首页软件配置的列表长度上限,防滥用。
+const maxHomeApps = 50
+
+type homeAppsBody struct {
+	Modules []string `json:"modules"`
+}
+
+// handleGetHomeApps 返回有序的首页展示模块 id 列表;无配置返回空列表。
+func (m *Module) handleGetHomeApps(w http.ResponseWriter, _ *http.Request) {
+	mods, err := m.ds.getHomeApps()
+	if err != nil {
+		http.Error(w, "home-apps unavailable", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, homeAppsBody{Modules: mods})
+}
+
+// handlePutHomeApps 覆盖保存整个有序列表。admin only;每个 id 须为非空字符串,长度 ≤ maxHomeApps。
+func (m *Module) handlePutHomeApps(w http.ResponseWriter, r *http.Request) {
+	if _, role := m.deps.Principal(r); role != "admin" {
+		http.Error(w, "forbidden: requires admin role", http.StatusForbidden)
+		return
+	}
+	var body homeAppsBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if len(body.Modules) > maxHomeApps {
+		http.Error(w, "too many modules", http.StatusBadRequest)
+		return
+	}
+	for _, id := range body.Modules {
+		if id == "" {
+			http.Error(w, "module id must be a non-empty string", http.StatusBadRequest)
+			return
+		}
+	}
+	if body.Modules == nil {
+		body.Modules = []string{}
+	}
+	if err := m.ds.setHomeApps(body.Modules); err != nil {
+		http.Error(w, "save home-apps failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, homeAppsBody{Modules: body.Modules})
 }
 
 type sysInfoResp struct {
-	Hostname     string `json:"hostname"`
-	OS           string `json:"os"`
-	Kernel       string `json:"kernel"`
-	Arch         string `json:"arch"`
-	PrivateIP    string `json:"private_ip"`
-	PublicIP     string `json:"public_ip"`
-	PanelVersion string `json:"panel_version"`
-	ServerTime   int64  `json:"server_time"`
+	Hostname         string `json:"hostname"`
+	OS               string `json:"os"`
+	Kernel           string `json:"kernel"`
+	Arch             string `json:"arch"`
+	CPUModel         string `json:"cpu_model"`
+	CPUPhysicalCores int    `json:"cpu_physical_cores"`
+	CPULogicalCores  int    `json:"cpu_logical_cores"`
+	PrivateIP        string `json:"private_ip"`
+	PublicIP         string `json:"public_ip"`
+	PanelVersion     string `json:"panel_version"`
+	ServerTime       int64  `json:"server_time"`
 }
 
 // sysInfo 收集只读系统信息;任一来源失败仅留空对应字段,不整体报错。
@@ -106,6 +176,7 @@ func sysInfo() sysInfoResp {
 		resp.Kernel = h.KernelVersion
 		resp.Arch = h.KernelArch
 	}
+	resp.CPUModel, resp.CPUPhysicalCores, resp.CPULogicalCores = system.CPUInfo()
 	return resp
 }
 

@@ -197,7 +197,7 @@ func TestEntryGateE2ECookieRedirect(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{Principal: PrincipalFromRequest}))
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)
@@ -250,7 +250,7 @@ func newModuleServerForCookie(t *testing.T) http.Handler {
 		t.Fatalf("register: %v", err)
 	}
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{Principal: PrincipalFromRequest}))
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("restore: %v", err)

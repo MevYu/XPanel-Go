@@ -106,7 +106,9 @@ func main() {
 	clientIP := func(r *http.Request) string { return server.ExtractClientIP(r, trustedProxies) }
 
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{
+		Principal: server.PrincipalFromRequest,
+	}))
 	reg.Register(service.New(service.Deps{
 		Principal: server.PrincipalFromRequest,
 		Audit:     auditFn,
