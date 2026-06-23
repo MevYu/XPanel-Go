@@ -87,14 +87,17 @@ func (*Module) Routes(r module.Router) {
 }
 
 type sysInfoResp struct {
-	Hostname     string `json:"hostname"`
-	OS           string `json:"os"`
-	Kernel       string `json:"kernel"`
-	Arch         string `json:"arch"`
-	PrivateIP    string `json:"private_ip"`
-	PublicIP     string `json:"public_ip"`
-	PanelVersion string `json:"panel_version"`
-	ServerTime   int64  `json:"server_time"`
+	Hostname         string `json:"hostname"`
+	OS               string `json:"os"`
+	Kernel           string `json:"kernel"`
+	Arch             string `json:"arch"`
+	CPUModel         string `json:"cpu_model"`
+	CPUPhysicalCores int    `json:"cpu_physical_cores"`
+	CPULogicalCores  int    `json:"cpu_logical_cores"`
+	PrivateIP        string `json:"private_ip"`
+	PublicIP         string `json:"public_ip"`
+	PanelVersion     string `json:"panel_version"`
+	ServerTime       int64  `json:"server_time"`
 }
 
 // sysInfo 收集只读系统信息;任一来源失败仅留空对应字段,不整体报错。
@@ -106,6 +109,7 @@ func sysInfo() sysInfoResp {
 		resp.Kernel = h.KernelVersion
 		resp.Arch = h.KernelArch
 	}
+	resp.CPUModel, resp.CPUPhysicalCores, resp.CPULogicalCores = system.CPUInfo()
 	return resp
 }
 

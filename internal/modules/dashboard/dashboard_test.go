@@ -71,7 +71,7 @@ func TestSysInfoEndpoint(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
 		t.Fatalf("sysinfo body not JSON object: %v: %s", err, rec.Body.String())
 	}
-	for _, key := range []string{"hostname", "os", "kernel", "arch", "private_ip", "public_ip", "panel_version"} {
+	for _, key := range []string{"hostname", "os", "kernel", "arch", "cpu_model", "cpu_physical_cores", "cpu_logical_cores", "private_ip", "public_ip", "panel_version"} {
 		if _, ok := info[key]; !ok {
 			t.Errorf("sysinfo body missing key %q: %s", key, rec.Body.String())
 		}
