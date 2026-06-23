@@ -21,7 +21,7 @@ func TestDashboardMountedAndAlwaysOn(t *testing.T) {
 	svc := auth.NewService(st, jm, auth.NewLockout(5, time.Minute, time.Now))
 
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{Principal: PrincipalFromRequest}))
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -54,7 +54,7 @@ func publicTestEnv(t *testing.T) http.Handler {
 
 	noopAudit := func(*int64, string, string, string) {}
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{Principal: PrincipalFromRequest}))
 	fm, err := files.New(t.TempDir(), st, files.Deps{Principal: PrincipalFromRequest, Audit: noopAudit})
 	if err != nil {
 		t.Fatalf("files.New: %v", err)
@@ -115,7 +115,7 @@ func TestPublicRouteGatedWhenDisabled(t *testing.T) {
 
 	noopAudit := func(*int64, string, string, string) {}
 	reg := module.NewRegistry()
-	reg.Register(dashboard.New())
+	reg.Register(dashboard.New(st, dashboard.Deps{Principal: PrincipalFromRequest}))
 	reg.Register(terminal.New(terminal.Deps{Principal: PrincipalFromRequest, Audit: noopAudit}))
 	mgr := module.NewManager(reg, st)
 	if err := mgr.Restore(); err != nil {
