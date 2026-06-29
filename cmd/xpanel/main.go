@@ -114,10 +114,16 @@ func main() {
 		Audit:     auditFn,
 		ClientIP:  clientIP,
 	}))
+	// 绝对 DB 路径作实例种子:同机多实例必用不同数据目录,故各自的 crontab 托管块互不覆盖。
+	cronSeed, err := filepath.Abs(cfg.DBPath)
+	if err != nil {
+		cronSeed = cfg.DBPath
+	}
 	cronMod := cron.New(st, cron.Deps{
-		Principal: server.PrincipalFromRequest,
-		Audit:     auditFn,
-		ClientIP:  clientIP,
+		Principal:    server.PrincipalFromRequest,
+		Audit:        auditFn,
+		ClientIP:     clientIP,
+		InstanceSeed: cronSeed,
 	})
 	reg.Register(cronMod)
 	reg.Register(firewall.New(firewall.Deps{
