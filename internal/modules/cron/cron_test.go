@@ -37,6 +37,11 @@ func fakeCrontab(t *testing.T) {
 
 // newTestModule 建一个挂好路由的模块,principal 返回给定角色。
 func newTestModule(t *testing.T, role string) (*Module, http.Handler, *[]string) {
+	return newTestModuleSeed(t, role, "")
+}
+
+// newTestModuleSeed 同 newTestModule,但显式指定实例种子,用于多实例共享 crontab 的测试。
+func newTestModuleSeed(t *testing.T, role, seed string) (*Module, http.Handler, *[]string) {
 	t.Helper()
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -50,6 +55,7 @@ func newTestModule(t *testing.T, role string) (*Module, http.Handler, *[]string)
 		Audit: func(_ *int64, action, detail, _ string) {
 			audits = append(audits, action+":"+detail)
 		},
+		InstanceSeed: seed,
 	})
 	r := chi.NewRouter()
 	m.Routes(r)
@@ -210,6 +216,57 @@ func TestSyncPreservesUserLines(t *testing.T) {
 	}
 	if !strings.Contains(ct, "/bin/managed.sh") {
 		t.Errorf("managed line missing:\n%s", ct)
+	}
+}
+
+// TestSyncMultiInstanceSharedCrontab:同一台机器上两个实例(不同种子)共享 root crontab。
+// 实例 B 的 sync 不得删掉实例 A 的托管块;B 禁用任务只删 B 自己的块,保留 A 的块和用户手工行。
+func TestSyncMultiInstanceSharedCrontab(t *testing.T) {
+	fakeCrontab(t) // 一份共享的 root crontab(spool),两个模块都经 PATH 解析到它
+	// 预置用户手工行。
+	if err := os.WriteFile(spoolPath(nil), []byte("MAILTO=root\n5 5 * * * /user/own.sh\n"), 0o644); err != nil {
+		t.Fatalf("seed spool: %v", err)
+	}
+
+	_, hA, _ := newTestModuleSeed(t, "operator", "/data/inst-a/xpanel.db")
+	mB, hB, _ := newTestModuleSeed(t, "operator", "/data/inst-b/xpanel.db")
+
+	// 实例 A 建任务 -> 写 A 的托管块。
+	if rec := do(t, hA, http.MethodPost, "/jobs", `{"expr":"0 3 * * *","command":"/a/job.sh"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("A create: want 201, got %d (%s)", rec.Code, rec.Body)
+	}
+	// 实例 B 建任务 -> 不得覆盖 A 的块。
+	rec := do(t, hB, http.MethodPost, "/jobs", `{"expr":"0 4 * * *","command":"/b/job.sh"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("B create: want 201, got %d (%s)", rec.Code, rec.Body)
+	}
+	var jb Job
+	_ = json.Unmarshal(rec.Body.Bytes(), &jb)
+
+	ct, _ := readSpool(mB)
+	if !strings.Contains(ct, "/a/job.sh") {
+		t.Errorf("instance A's job clobbered by B's sync:\n%s", ct)
+	}
+	if !strings.Contains(ct, "/b/job.sh") {
+		t.Errorf("instance B's job missing:\n%s", ct)
+	}
+	if !strings.Contains(ct, "/user/own.sh") {
+		t.Errorf("user manual line lost:\n%s", ct)
+	}
+
+	// 实例 B 禁用任务 -> 只删 B 的块,保留 A 的块与用户行。
+	if rec := do(t, hB, http.MethodPost, "/jobs/"+itoa(jb.ID)+"/disable", ""); rec.Code != http.StatusOK {
+		t.Fatalf("B disable: want 200, got %d", rec.Code)
+	}
+	ct, _ = readSpool(mB)
+	if strings.Contains(ct, "/b/job.sh") {
+		t.Errorf("disabled instance B's job must be gone:\n%s", ct)
+	}
+	if !strings.Contains(ct, "/a/job.sh") {
+		t.Errorf("instance A's job must survive B's disable:\n%s", ct)
+	}
+	if !strings.Contains(ct, "/user/own.sh") {
+		t.Errorf("user manual line must survive B's disable:\n%s", ct)
 	}
 }
 

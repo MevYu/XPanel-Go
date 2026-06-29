@@ -34,6 +34,11 @@ type Deps struct {
 	ClientIP   func(*http.Request) string                      // 取真实客户端 IP(受信代理感知)
 	BackupSite func(target string) error                       // backup_site:target 为站点名
 	BackupDB   func(target string) error                       // backup_db:target 为 "<engine>:<database>"
+
+	// InstanceSeed 是本实例的稳定、同机唯一标识种子(宿主传绝对 DB 路径)。
+	// 用于区分同机多个实例在 root crontab 里各自的托管块,互不覆盖。
+	// 空种子(如内存库/测试)退化为确定性默认 key。
+	InstanceSeed string
 }
 
 // logCutRoot 是日志切割任务的路径限定根:log_cut 的 path 经 SafeJoin 限定其下。
@@ -45,6 +50,7 @@ type Module struct {
 	deps  Deps
 	run   *execRunner // 真实执行器;备份钩子可经 SetBackupHooks 后补
 	sched *scheduler
+	key   string // 本实例 crontab 托管块 key,区分同机多实例
 }
 
 // New 建表并返回模块。建表失败(如 DB 不可用)直接 panic:模块无法工作。
@@ -60,7 +66,7 @@ func New(st *store.Store, deps Deps) *Module {
 		backupSite: deps.BackupSite,
 		backupDB:   deps.BackupDB,
 	}
-	return &Module{cs: cs, deps: deps, run: r, sched: newScheduler(cs, r)}
+	return &Module{cs: cs, deps: deps, run: r, sched: newScheduler(cs, r), key: system.InstanceKey(deps.InstanceSeed)}
 }
 
 // SetBackupHooks 注入备份钩子。宿主在 sites/database 模块构造后调用一次
@@ -351,7 +357,7 @@ func (m *Module) handleRunNow(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// syncCrontab 用所有启用任务重写 crontab 托管区,保留区外用户行。
+// syncCrontab 用所有启用任务重写本实例 crontab 托管区,保留区外用户行与其它实例的块。
 func (m *Module) syncCrontab() error {
 	jobs, err := m.cs.enabled()
 	if err != nil {
@@ -367,7 +373,7 @@ func (m *Module) syncCrontab() error {
 	if err != nil {
 		return err
 	}
-	merged := system.MergeManagedBlock(existing, system.RenderManagedBlock(lines))
+	merged := system.MergeManagedBlock(existing, system.RenderManagedBlock(m.key, lines), m.key)
 	return system.WriteCrontab(merged)
 }
 
