@@ -3,6 +3,7 @@ package server
 import (
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -140,7 +141,15 @@ func NewWithModules(svc *auth.Service, jwt *auth.JWTManager, reg *module.Registr
 
 	// catch-all:非 API/公开路由交给 SPA(静态资源或 index.html 回退)。
 	// EntryGate 已确保只有入口路径与 /assets/* 能到这;SPA 注入 entryPath 作为 basename。
-	r.NotFound(webui.HandlerWithBase(entryPath).ServeHTTP)
+	// 未注册的 /api/* 返回 404 JSON,避免前端 apiFetch 对 SPA HTML 做 JSON.parse 崩溃。
+	spa := webui.HandlerWithBase(entryPath)
+	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasPrefix(req.URL.Path, "/api/") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		spa.ServeHTTP(w, req)
+	})
 
 	return r
 }
