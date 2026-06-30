@@ -369,6 +369,14 @@ func (m *Module) syncCrontab() error {
 			ID: j.ID, Expr: j.Expr, Command: j.Command, Comment: j.Comment,
 		})
 	}
+	// host 级 flock:串行化同机所有实例对 root crontab 的「读-改-写」,
+	// 消除 keyed 标记之外残留的 TOCTOU 丢更新。锁包住整段读→merge→写。
+	release, err := system.LockCrontab()
+	if err != nil {
+		log.Printf("cron: crontab lock contended, skip write: %v", err)
+		return err
+	}
+	defer release()
 	existing, err := system.ReadCrontab()
 	if err != nil {
 		return err

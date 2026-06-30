@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/MevYu/XPanel-Go/internal/store"
+	"github.com/MevYu/XPanel-Go/internal/system"
 )
 
 // fakeCrontab 把一个假的 crontab 脚本放到 PATH 最前,使写路径既可控又不动宿主真实 crontab。
@@ -33,6 +34,11 @@ func fakeCrontab(t *testing.T) {
 		t.Fatalf("write fake crontab: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// host crontab 锁也落到临时目录:既不动宿主真实锁文件,又让同一测试内多个实例共享同一把锁。
+	oldLockPath := system.CrontabLockPath
+	system.CrontabLockPath = func() string { return filepath.Join(dir, "lock") }
+	t.Cleanup(func() { system.CrontabLockPath = oldLockPath })
 }
 
 // newTestModule 建一个挂好路由的模块,principal 返回给定角色。
